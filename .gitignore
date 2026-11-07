@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.*
+!.env.example
+.claude/settings.local.json
+coverage/
+*.log
+dist/
+
+# spike descartável (removido no T121)
+spike/node_modules/
+spike/dist/
