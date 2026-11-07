@@ -1,0 +1,66 @@
+name: junglegaming
+
+x-app: &app
+  build: .
+  env_file: .env.example
+  environment:
+    DATABASE_URL: postgresql://junglegaming:junglegaming@postgres:5432/junglegaming
+    NODE_ENV: production
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: junglegaming
+      POSTGRES_PASSWORD: junglegaming
+      POSTGRES_DB: junglegaming
+    ports:
+      # A porta do host é configurável (POSTGRES_PORT no .env); padrão 5432.
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U junglegaming -d junglegaming"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  migrate:
+    build: .
+    env_file: .env.example
+    environment:
+      DATABASE_URL: postgresql://junglegaming:junglegaming@postgres:5432/junglegaming
+    command: ["bun", "run", "migrate:up"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  app1:
+    <<: *app
+    environment:
+      DATABASE_URL: postgresql://junglegaming:junglegaming@postgres:5432/junglegaming
+      NODE_ENV: production
+      PORT: "3001"
+    ports:
+      - "3001:3001"
+
+  app2:
+    <<: *app
+    profiles: ["cluster"]
+    environment:
+      DATABASE_URL: postgresql://junglegaming:junglegaming@postgres:5432/junglegaming
+      NODE_ENV: production
+      PORT: "3002"
+    ports:
+      - "3002:3002"
+
+  app3:
+    <<: *app
+    profiles: ["cluster"]
+    environment:
+      DATABASE_URL: postgresql://junglegaming:junglegaming@postgres:5432/junglegaming
+      NODE_ENV: production
+      PORT: "3003"
+    ports:
+      - "3003:3003"

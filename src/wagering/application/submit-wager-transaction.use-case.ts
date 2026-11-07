@@ -1,0 +1,264 @@
+import type { EntityManager, MikroORM } from '@mikro-orm/postgresql';
+import { OutboxMessage } from '../../outbox/domain/outbox-message.ts';
+import type { MikroOrmOutboxWriter } from '../../outbox/infrastructure/mikro-orm-outbox.writer.ts';
+import { currentRequestContext, setRequestContextValues } from '../../platform/correlation/request-context.ts';
+import type { Failpoints } from '../../platform/failpoints/failpoints.ts';
+import { classifyDbError } from '../../platform/persistence/pg-errors.ts';
+import type { UnitOfWork } from '../../platform/persistence/unit-of-work.ts';
+import {
+  IdempotencyConflictError,
+  InternalError,
+  WalletNotFoundError,
+} from '../../shared-kernel/application/errors.ts';
+import type { Clock } from '../../shared-kernel/domain/clock.port.ts';
+import type { IdGenerator } from '../../shared-kernel/domain/id-generator.port.ts';
+import type { EventContext, IntegrationEvent } from '../../shared-kernel/domain/integration-event.ts';
+import { Money, type MoneyProps } from '../../shared-kernel/domain/money.ts';
+import { WalletBalanceChanged } from '../../wallets/domain/events/wallet-balance-changed.event.ts';
+import { LedgerDirection } from '../../wallets/domain/ledger-direction.ts';
+import type { Wallet } from '../../wallets/domain/wallet.ts';
+import type { MikroOrmLedgerRepository } from '../../wallets/infrastructure/mikro-orm-ledger.repository.ts';
+import type { MikroOrmWalletRepository } from '../../wallets/infrastructure/mikro-orm-wallet.repository.ts';
+import { WagerTransactionProcessed } from '../domain/events/wager-transaction-processed.event.ts';
+import { WagerTransactionRejected } from '../domain/events/wager-transaction-rejected.event.ts';
+import { WagerRulesService, type WagerDecision } from '../domain/wager-rules.service.ts';
+import { WagerTransaction, type WagerTransactionKind } from '../domain/wager-transaction.ts';
+import type { MikroOrmWagerTransactionRepository } from '../infrastructure/mikro-orm-wager-transaction.repository.ts';
+import { computePayloadHash } from './payload-hash.ts';
+import { toTransactionResult, type TransactionResult } from './transaction-result.ts';
+
+/** Payload de negócio já validado e normalizado pela borda (HTTP agora; fila na feature de mensageria). */
+export interface SubmitWagerTransactionInput {
+  providerId: string;
+  externalTransactionId: string;
+  playerId: string;
+  walletId: string;
+  roundId: string;
+  gameId: string;
+  kind: 'BET' | 'WIN' | 'LOSS' | 'REFUND' | 'ROLLBACK';
+  money: MoneyProps;
+  referenceExternalTransactionId?: string | undefined;
+}
+
+export interface SubmitWagerTransactionCommand {
+  idempotencyKey: string;
+  input: SubmitWagerTransactionInput;
+}
+
+/** Dados fixos de uma requisição aceita, iguais em todas as tentativas da unit of work. */
+interface AcceptedRequest {
+  command: SubmitWagerTransactionCommand;
+  payloadHash: string;
+  correlationId: string;
+  receivedAt: Date;
+}
+
+/** Onde a duplicata foi reconhecida (R-08): caminho rápido, releitura sob o lock ou releitura depois do 23505. */
+type IdempotencySource = 'fast-path' | 'under-lock' | 'after-unique-violation';
+
+/** Log estruturado mínimo (o JsonLogger da plataforma); nunca recebe valores monetários (FR-058). */
+export interface UseCaseLogger {
+  info(message: string, fields?: Record<string, unknown>): void;
+}
+
+export interface SubmitWagerTransactionDeps {
+  orm: Pick<MikroORM, 'em'>;
+  unitOfWork: UnitOfWork<EntityManager>;
+  wallets: MikroOrmWalletRepository;
+  transactions: MikroOrmWagerTransactionRepository;
+  ledger: MikroOrmLedgerRepository;
+  outbox: MikroOrmOutboxWriter;
+  failpoints: Failpoints;
+  clock: Clock;
+  ids: IdGenerator;
+  logger: UseCaseLogger;
+}
+
+/**
+ * Submissão de BET, WIN, LOSS, REFUND e ROLLBACK (data-model §3; I-44; R-07, R-08, R-10, R-19). A carga da
+ * referência entra nas US4 a US6 (T090, T096, T101).
+ *
+ * Ordem do I-44: os passos 1 e 2 (header e payload) são da borda; 3 = idempotência (replay ou conflito), antes de
+ * olhar a wallet; 4 = wallet inexistente → 404 sem persistir; 5 = regras de negócio sob o lock da wallet, num
+ * serviço de domínio puro.
+ *
+ * Idempotência (R-08, I-24, I-26, I-27, I-56), toda no banco, nunca em memória (FR-037):
+ *   1. caminho rápido, fora da transação, por (provider, chave) e por (provider, id externo);
+ *   2. releitura das duas chaves sob o lock da wallet, com o EM da transação;
+ *   3. 23505 em `wager_tx_provider_idempotency_uq` ou `wager_tx_provider_external_uq` → depois do rollback, releitura
+ *      num fork novo. O PostgreSQL só reporta a violação depois que a transação concorrente decide, então a linha
+ *      vencedora já está confirmada quando é relida.
+ * Mesmo hash → replay com o resultado gravado; hash diferente, ou o mesmo id externo com outra chave → 409.
+ */
+export class SubmitWagerTransactionUseCase {
+  private readonly rules = new WagerRulesService();
+
+  constructor(private readonly deps: SubmitWagerTransactionDeps) {}
+
+  async execute(command: SubmitWagerTransactionCommand): Promise<TransactionResult> {
+    const { input } = command;
+    const request: AcceptedRequest = {
+      command,
+      payloadHash: computePayloadHash(input),
+      correlationId: currentRequestContext()?.correlationId ?? this.deps.ids.next(),
+      receivedAt: this.deps.clock.now(),
+    };
+
+    // I-44 passo 3: caminho rápido num fork próprio, sem lock. O replay não disputa o lock da wallet nem depende
+    // da checagem de wallet do passo 4.
+    const known = await this.resolveExisting(this.deps.orm.em.fork(), request, 'fast-path');
+    if (known) return known;
+
+    // I-44 passo 4 (I-20): wallet inexistente → 404 sem registrar nada. Leitura num fork próprio, que termina antes
+    // de a transação começar (R-19).
+    const existing = await this.deps.wallets.findById(this.deps.orm.em.fork(), input.walletId);
+    if (!existing) throw new WalletNotFoundError();
+
+    let outcome: { result: TransactionResult; replay: boolean };
+    try {
+      // Cada tentativa da unit of work (repetição de 40P01/40001, R-12) roda num fork novo e recomeça do zero: a
+      // transação de domínio, os ids e os eventos são criados dentro do callback, nunca reaproveitados de uma
+      // tentativa que sofreu rollback.
+      outcome = await this.deps.unitOfWork.run((em) => this.applyUnderLock(em, request));
+    } catch (error) {
+      if (classifyDbError(error) !== 'idempotency-race') throw error;
+      // R-08 passo 3: a transação desta requisição já sofreu rollback; relê fora dela, num fork novo.
+      const resolved = await this.resolveExisting(this.deps.orm.em.fork(), request, 'after-unique-violation');
+      if (resolved) return resolved;
+      throw new InternalError({ cause: error });
+    }
+
+    // Depois do commit de um efeito novo e antes da resposta (testes de queda, R-16); no-op em produção (I-40).
+    if (!outcome.replay) this.deps.failpoints.hit('after_commit_before_response');
+    return outcome.result;
+  }
+
+  /**
+   * Dentro da transação: toda query usa o `em` recebido, que é o da transação (R-19). Trava a wallet, relê a
+   * idempotência sob o lock, decide e grava na ordem do data-model §3: transação já no status final → saldo com
+   * asserção de versão → lançamento → outbox.
+   */
+  private async applyUnderLock(
+    em: EntityManager,
+    request: AcceptedRequest,
+  ): Promise<{ result: TransactionResult; replay: boolean }> {
+    const wallet = await this.deps.wallets.lockById(em, request.command.input.walletId);
+    if (!wallet) throw new WalletNotFoundError();
+
+    // R-08 passo 2: em READ COMMITTED, depois do lock esta leitura enxerga tudo o que foi confirmado antes dela.
+    const known = await this.resolveExisting(em, request, 'under-lock');
+    if (known) return { result: known, replay: true };
+
+    const transaction = this.newTransaction(request);
+    const decision = this.rules.decide({ wallet, transaction, reference: undefined, referenceAlreadyReversed: false });
+    const now = this.deps.clock.now();
+    const events = await this.record(em, decision, wallet, transaction, { correlationId: request.correlationId, now });
+
+    await this.deps.outbox.append(em, events.map((event) => OutboxMessage.enqueue(event)));
+    // Depois do lançamento e antes do commit: prova a atomicidade (SC-007); no-op em produção (I-40).
+    this.deps.failpoints.hit('after_ledger_insert_before_commit');
+    return { result: toTransactionResult(transaction, { replay: false }), replay: false };
+  }
+
+  /**
+   * Procura, numa única consulta, uma transação já registrada pela mesma chave do mesmo provedor ou pelo mesmo
+   * (provider, id externo); a da mesma chave tem precedência. Mesmo hash → replay do resultado gravado (status,
+   * failureCode e saldo observado, I-26), sem registrar eventos e sem tocar no correlation_id gravado (I-53). Hash
+   * diferente, ou o mesmo id externo sob outra chave → IdempotencyConflictError (I-24).
+   */
+  private async resolveExisting(
+    em: EntityManager,
+    request: AcceptedRequest,
+    source: IdempotencySource,
+  ): Promise<TransactionResult | undefined> {
+    const { idempotencyKey, input } = request.command;
+    const matches = await this.deps.transactions.findByProviderAndKeyOrExternalId(
+      em,
+      input.providerId,
+      idempotencyKey,
+      input.externalTransactionId,
+    );
+    const byKey = matches.find((tx) => tx.idempotencyKey === idempotencyKey);
+    const found = byKey ?? matches[0];
+    if (!found) return undefined;
+
+    setRequestContextValues({ transactionId: found.id });
+    if (byKey && byKey.matchesPayload(request.payloadHash)) {
+      this.deps.logger.info('wager.idempotency', { outcome: 'replay', source, transactionId: found.id });
+      return toTransactionResult(byKey, { replay: true });
+    }
+    this.deps.logger.info('wager.idempotency', { outcome: 'conflict', source, transactionId: found.id });
+    throw new IdempotencyConflictError();
+  }
+
+  /** Nova instância PENDING, com id novo, a cada tentativa. */
+  private newTransaction(request: AcceptedRequest): WagerTransaction {
+    const { command, payloadHash, correlationId, receivedAt } = request;
+    const { input } = command;
+    const transaction = WagerTransaction.create({
+      id: this.deps.ids.next(),
+      providerId: input.providerId,
+      externalTransactionId: input.externalTransactionId,
+      idempotencyKey: command.idempotencyKey,
+      payloadHash,
+      walletId: input.walletId,
+      playerId: input.playerId,
+      roundId: input.roundId,
+      gameId: input.gameId,
+      kind: input.kind as WagerTransactionKind,
+      money: Money.from(input.money),
+      referenceExternalTransactionId: input.referenceExternalTransactionId,
+      correlationId,
+      createdAt: receivedAt,
+    });
+    // Contexto de log: o id da tentativa corrente (a que vier a ser confirmada é a última gravada aqui).
+    setRequestContextValues({ transactionId: transaction.id });
+    return transaction;
+  }
+
+  /** Aplica a decisão e devolve os eventos na ordem de gravação: WalletBalanceChanged antes do evento de status. */
+  private async record(
+    em: EntityManager,
+    decision: WagerDecision,
+    wallet: Wallet,
+    transaction: WagerTransaction,
+    at: { correlationId: string; now: Date },
+  ): Promise<IntegrationEvent<unknown>[]> {
+    const { ids } = this.deps;
+    const context = (): EventContext => ({ eventId: ids.next(), correlationId: at.correlationId, occurredAt: at.now });
+
+    switch (decision.type) {
+      case 'REJECT': {
+        // REJECTED não altera saldo nem gera lançamento (FR-027); o saldo observado é o atual (FR-036).
+        transaction.reject(decision.code, wallet.balance, at.now);
+        await this.deps.transactions.insert(em, transaction);
+        return [WagerTransactionRejected.from(transaction, context())];
+      }
+      case 'APPLY': {
+        const events: IntegrationEvent<unknown>[] = [];
+        if (decision.direction === undefined) {
+          // Sem efeito no saldo: PROCESSED sem lançamento e sem tocar a wallet (FR-018).
+          transaction.markProcessed(undefined, wallet.balance, at.now);
+          await this.deps.transactions.insert(em, transaction);
+        } else {
+          const expectedVersion = wallet.version;
+          const entryId = ids.next();
+          const entry =
+            decision.direction === LedgerDirection.Debit
+              ? wallet.debit(transaction.money, entryId, transaction.id, at.now)
+              : wallet.credit(transaction.money, entryId, transaction.id, at.now);
+          transaction.markProcessed(undefined, wallet.balance, at.now);
+          await this.deps.transactions.insert(em, transaction);
+          await this.deps.wallets.updateBalance(em, wallet, expectedVersion);
+          await this.deps.ledger.insert(em, entry);
+          events.push(WalletBalanceChanged.from(wallet, entry, context()));
+        }
+        events.push(WagerTransactionProcessed.from(transaction, wallet.version, context()));
+        return events;
+      }
+      case 'PENDING_REFERENCE':
+        // As regras só devolvem PENDING_REFERENCE com o passo 5.3 ativo; o tratamento entra no T101 (US6).
+        throw new Error('PENDING_REFERENCE is not produced before US6 (T101)');
+    }
+  }
+}

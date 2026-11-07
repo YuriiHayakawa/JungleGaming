@@ -1,0 +1,4 @@
+# Sem preload global: o preload de banco (test/support/db-setup.preload.ts) é passado só pelos scripts
+# test:integration e test:concurrency (research R-17).
+[test]
+timeout = 60000
