@@ -22,10 +22,13 @@ import type { MikroOrmWalletRepository } from '../../wallets/infrastructure/mikr
 import { WagerTransactionProcessed } from '../domain/events/wager-transaction-processed.event.ts';
 import { WagerTransactionRejected } from '../domain/events/wager-transaction-rejected.event.ts';
 import { WagerRulesService, type WagerDecision } from '../domain/wager-rules.service.ts';
-import { WagerTransaction, type WagerTransactionKind } from '../domain/wager-transaction.ts';
+import { WagerTransaction, WagerTransactionStatus, type WagerTransactionKind } from '../domain/wager-transaction.ts';
 import type { MikroOrmWagerTransactionRepository } from '../infrastructure/mikro-orm-wager-transaction.repository.ts';
 import { computePayloadHash } from './payload-hash.ts';
 import { toTransactionResult, type TransactionResult } from './transaction-result.ts';
+
+/** Uma única repetição do use case depois de 23505 no índice de reversão única (R-12). */
+const MAX_REVERSAL_RACE_RETRIES = 1;
 
 /** Payload de negócio já validado e normalizado pela borda (HTTP agora; fila na feature de mensageria). */
 export interface SubmitWagerTransactionInput {
@@ -116,10 +119,7 @@ export class SubmitWagerTransactionUseCase {
 
     let outcome: { result: TransactionResult; replay: boolean };
     try {
-      // Cada tentativa da unit of work (repetição de 40P01/40001, R-12) roda num fork novo e recomeça do zero: a
-      // transação de domínio, os ids e os eventos são criados dentro do callback, nunca reaproveitados de uma
-      // tentativa que sofreu rollback.
-      outcome = await this.deps.unitOfWork.run((em) => this.applyUnderLock(em, request));
+      outcome = await this.runRetryingReversalRace(request);
     } catch (error) {
       if (classifyDbError(error) !== 'idempotency-race') throw error;
       // R-08 passo 3: a transação desta requisição já sofreu rollback; relê fora dela, num fork novo.
@@ -139,9 +139,33 @@ export class SubmitWagerTransactionUseCase {
   }
 
   /**
+   * Roda a transação de escrita. Cada execução da unit of work (inclusive as repetições internas de 40P01/40001, R-12)
+   * abre um fork novo e recomeça do zero: a transação de domínio, os ids e os eventos são criados dentro do callback,
+   * nunca reaproveitados de uma tentativa que sofreu rollback (T132).
+   *
+   * `23505` em `wager_tx_single_reversal_uq` (R-12, FR-025, T096): a reversão concorrente já foi confirmada; repete o
+   * use case **uma** vez, do zero, e sob o lock a nova execução vê a reversão confirmada e responde ALREADY_REVERSED.
+   * Uma segunda violação é quebra de invariante → InternalError (500), sem efeito.
+   */
+  private async runRetryingReversalRace(request: AcceptedRequest): Promise<{ result: TransactionResult; replay: boolean }> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.deps.unitOfWork.run((em) => this.applyUnderLock(em, request));
+      } catch (error) {
+        if (classifyDbError(error) !== 'reversal-race') throw error;
+        if (attempt >= MAX_REVERSAL_RACE_RETRIES) {
+          this.deps.logger.info('wager.reversal_race', { outcome: 'exhausted', attempt });
+          throw new InternalError({ cause: error });
+        }
+        this.deps.logger.info('wager.reversal_race', { outcome: 'retry', attempt });
+      }
+    }
+  }
+
+  /**
    * Dentro da transação: toda query usa o `em` recebido, que é o da transação (R-19). Trava a wallet, relê a
-   * idempotência sob o lock, decide e grava na ordem do data-model §3: transação já no status final → saldo com
-   * asserção de versão → lançamento → outbox.
+   * idempotência sob o lock, carrega a referência, decide e grava na ordem do data-model §3: transação já no status
+   * final → saldo com asserção de versão → lançamento → outbox.
    */
   private async applyUnderLock(
     em: EntityManager,
@@ -157,7 +181,8 @@ export class SubmitWagerTransactionUseCase {
     const transaction = this.newTransaction(request);
     // data-model §3 passo 4: referência carregada sob o lock, com o EM da transação (R-19).
     const reference = await this.loadReference(em, transaction);
-    const decision = this.rules.decide({ wallet, transaction, reference, referenceAlreadyReversed: false });
+    const referenceAlreadyReversed = await this.isAlreadyReversed(em, transaction, reference);
+    const decision = this.rules.decide({ wallet, transaction, reference, referenceAlreadyReversed });
     const now = this.deps.clock.now();
     const events = await this.record(em, decision, wallet, transaction, reference, {
       correlationId: request.correlationId,
@@ -165,7 +190,11 @@ export class SubmitWagerTransactionUseCase {
     });
 
     await this.deps.outbox.append(em, events.map((event) => OutboxMessage.enqueue(event)));
-    // Depois do lançamento e antes do commit: prova a atomicidade (SC-007); no-op em produção (I-40).
+    // Depois do lançamento e antes do commit: prova a atomicidade (SC-007) e as repetições (R-12, T096); no-op em
+    // produção (I-40).
+    if (transaction.requiresReference() && transaction.status === WagerTransactionStatus.Processed) {
+      this.deps.failpoints.hit('after_reversal_insert_before_commit');
+    }
     this.deps.failpoints.hit('after_ledger_insert_before_commit');
     return { result: toTransactionResult(transaction, { replay: false }), replay: false };
   }
@@ -210,6 +239,20 @@ export class SubmitWagerTransactionUseCase {
     const externalId = transaction.referenceExternalTransactionId;
     if (externalId === undefined) return undefined;
     return (await this.deps.transactions.findByProviderAndExternalId(em, transaction.providerId, externalId)) ?? undefined;
+  }
+
+  /**
+   * ALREADY_REVERSED (I-16): consultado só quando a transação é REFUND ou ROLLBACK e a referência está PROCESSED
+   * (R-10). Sob o lock da wallet, em READ COMMITTED, enxerga toda reversão confirmada antes; o índice parcial
+   * `wager_tx_single_reversal_uq` cobre o resto.
+   */
+  private async isAlreadyReversed(
+    em: EntityManager,
+    transaction: WagerTransaction,
+    reference: WagerTransaction | undefined,
+  ): Promise<boolean> {
+    if (!transaction.requiresReference() || reference?.status !== WagerTransactionStatus.Processed) return false;
+    return this.deps.transactions.existsProcessedReversal(em, reference.id);
   }
 
   /** Nova instância PENDING, com id novo, a cada tentativa. Não toca o contexto de log (só depois do commit). */

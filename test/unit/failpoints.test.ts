@@ -78,3 +78,34 @@ test('NODE_ENV=production também desliga o modo serialization_failure_once', ()
   expect(() => fp.hit('after_ledger_insert_before_commit')).not.toThrow();
   expect(fp.triggered('after_ledger_insert_before_commit')).toBe(0);
 });
+
+test('modo reversal_unique_violation_once: na 1ª passagem lança 23505 de wager_tx_single_reversal_uq (reversal-race); depois nada', async () => {
+  const { classifyDbError } = await import('../../src/platform/persistence/pg-errors.ts');
+  const fp = new EnvFailpoints({ failpoint: 'after_reversal_insert_before_commit:reversal_unique_violation_once', nodeEnv: 'test' });
+  let thrown: unknown;
+  try {
+    fp.hit('after_reversal_insert_before_commit');
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toMatchObject({ code: '23505', constraint: 'wager_tx_single_reversal_uq' });
+  expect(classifyDbError(thrown)).toBe('reversal-race');
+  expect(() => fp.hit('after_reversal_insert_before_commit')).not.toThrow();
+  expect(() => fp.hit('after_ledger_insert_before_commit')).not.toThrow();
+  expect(fp.triggered('after_reversal_insert_before_commit')).toBe(1);
+  expect(fp.passes('after_reversal_insert_before_commit')).toBe(2);
+});
+
+test('modo reversal_unique_violation_always: lança em toda passagem', () => {
+  const fp = new EnvFailpoints({ failpoint: 'after_reversal_insert_before_commit:reversal_unique_violation_always', nodeEnv: 'test' });
+  for (let i = 0; i < 3; i++) expect(() => fp.hit('after_reversal_insert_before_commit')).toThrow(/23505/);
+  expect(fp.triggered('after_reversal_insert_before_commit')).toBe(3);
+});
+
+test('after_reversal_insert_before_commit no modo padrão lança FailpointError; NODE_ENV=production desliga', () => {
+  expect(() => new EnvFailpoints({ failpoint: 'after_reversal_insert_before_commit', nodeEnv: 'test' }).hit('after_reversal_insert_before_commit')).toThrow(
+    FailpointError,
+  );
+  const off = new EnvFailpoints({ failpoint: 'after_reversal_insert_before_commit:reversal_unique_violation_always', nodeEnv: 'production' });
+  expect(() => off.hit('after_reversal_insert_before_commit')).not.toThrow();
+});

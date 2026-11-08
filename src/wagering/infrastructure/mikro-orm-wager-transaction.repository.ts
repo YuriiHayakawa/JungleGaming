@@ -38,6 +38,21 @@ export class MikroOrmWagerTransactionRepository {
     return records.map((record) => WagerTransactionMapper.toDomain(record));
   }
 
+  /**
+   * Se a transação referenciada já tem uma reversão PROCESSED, REFUND ou ROLLBACK (I-16). O predicado é o mesmo do
+   * índice parcial `wager_tx_single_reversal_uq`, que atende a consulta. Chamada sob o lock da wallet, com o EM da
+   * transação (R-19); o índice continua sendo a garantia final sob concorrência.
+   */
+  async existsProcessedReversal(em: EntityManager, referenceTransactionId: string): Promise<boolean> {
+    const rows = await em.execute<{ found: number }[]>(
+      `SELECT 1 AS found FROM wager_transactions
+        WHERE reference_transaction_id = ? AND kind IN ('REFUND','ROLLBACK') AND status = 'PROCESSED'
+        LIMIT 1`,
+      [referenceTransactionId],
+    );
+    return rows.length > 0;
+  }
+
   /** Busca por (provider, id externo); usa `wager_tx_provider_external_uq` (I-24). */
   async findByProviderAndExternalId(
     em: EntityManager,

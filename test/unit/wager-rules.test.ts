@@ -263,3 +263,190 @@ describe('US4: WIN e LOSS', () => {
     expect(decideWith(w, referencing(Kind.Win, w, '10.00', bet), bet)).toEqual(rejected(FailureCode.BalanceLimitExceeded));
   });
 });
+
+/**
+ * Uma abertura PROCESSED com o mesmo escopo da transação nova. Pela API ela nunca é alcançável (o provider "system"
+ * é recusado na entrada, I-07), mas a regra de tipo existe no domínio e é testada aqui via rehydrate.
+ */
+function openingInScope(target: Wallet, amount: string): WagerTransaction {
+  const base = tx(Kind.Win, target, amount);
+  return WagerTransaction.rehydrate({
+    id: base.id,
+    providerId: base.providerId,
+    externalTransactionId: base.externalTransactionId,
+    idempotencyKey: base.idempotencyKey,
+    payloadHash: base.payloadHash,
+    walletId: base.walletId,
+    playerId: base.playerId,
+    roundId: base.roundId,
+    gameId: base.gameId,
+    kind: Kind.Opening,
+    money: base.money,
+    referenceExternalTransactionId: undefined,
+    referenceTransactionId: undefined,
+    correlationId: base.correlationId,
+    createdAt: clock.now(),
+    status: Status.Processed,
+    failureCode: undefined,
+    observedBalance: target.balance,
+    referenceAttempts: 0,
+    nextReferenceAttemptAt: undefined,
+    processedAt: clock.now(),
+    updatedAt: clock.now(),
+  });
+}
+
+// T091 — REFUND e ROLLBACK (US5; I-12, I-14 a I-18, I-44; FR-019 a FR-026).
+describe('US5: reversões', () => {
+  test('REFUND de BET PROCESSED → Apply(CREDIT)', () => {
+    const w = wallet('75.00');
+    const bet = ref(Kind.Bet, w, '25.00');
+    expect(decideWith(w, referencing(Kind.Refund, w, '25.00', bet), bet)).toEqual({ type: 'APPLY', direction: LedgerDirection.Credit });
+  });
+
+  test('ROLLBACK de BET → CREDIT; de WIN → DEBIT; de REFUND → DEBIT', () => {
+    const w = wallet('100.00');
+    const bet = ref(Kind.Bet, w, '25.00');
+    const win = ref(Kind.Win, w, '50.00');
+    const refund = ref(Kind.Refund, w, '25.00');
+    expect(decideWith(w, referencing(Kind.Rollback, w, '25.00', bet), bet)).toEqual({ type: 'APPLY', direction: LedgerDirection.Credit });
+    expect(decideWith(w, referencing(Kind.Rollback, w, '50.00', win), win)).toEqual({ type: 'APPLY', direction: LedgerDirection.Debit });
+    expect(decideWith(w, referencing(Kind.Rollback, w, '25.00', refund), refund)).toEqual({
+      type: 'APPLY',
+      direction: LedgerDirection.Debit,
+    });
+  });
+
+  describe('INVALID_REFERENCE_KIND (I-14)', () => {
+    for (const referenceKind of [Kind.Win, Kind.Loss, Kind.Refund, Kind.Rollback]) {
+      test(`REFUND de ${referenceKind}`, () => {
+        const w = wallet('100.00');
+        const reference = ref(referenceKind, w, '25.00');
+        expect(decideWith(w, referencing(Kind.Refund, w, '25.00', reference), reference)).toEqual(
+          rejected(FailureCode.InvalidReferenceKind),
+        );
+      });
+    }
+    for (const referenceKind of [Kind.Loss, Kind.Rollback]) {
+      test(`ROLLBACK de ${referenceKind}`, () => {
+        const w = wallet('100.00');
+        const reference = ref(referenceKind, w, '25.00');
+        expect(decideWith(w, referencing(Kind.Rollback, w, '25.00', reference), reference)).toEqual(
+          rejected(FailureCode.InvalidReferenceKind),
+        );
+      });
+    }
+    test('ROLLBACK e REFUND de OPENING (regra de domínio)', () => {
+      const w = wallet('100.00');
+      const opening = openingInScope(w, '100.00');
+      expect(decideWith(w, referencing(Kind.Rollback, w, '100.00', opening), opening)).toEqual(
+        rejected(FailureCode.InvalidReferenceKind),
+      );
+      expect(decideWith(w, referencing(Kind.Refund, w, '100.00', opening), opening)).toEqual(
+        rejected(FailureCode.InvalidReferenceKind),
+      );
+    });
+  });
+
+  test('REFERENCE_MISMATCH também vale para reversões (rodada diferente)', () => {
+    const w = wallet('100.00');
+    const bet = ref(Kind.Bet, w, '25.00', Status.Processed, { roundId: 'round-1' });
+    expect(decideWith(w, referencing(Kind.Refund, w, '25.00', bet, { roundId: 'round-9' }), bet)).toEqual(
+      rejected(FailureCode.ReferenceMismatch),
+    );
+  });
+
+  test('valor diferente do da referência → AMOUNT_MISMATCH (I-17), para REFUND e ROLLBACK', () => {
+    const w = wallet('100.00');
+    const bet = ref(Kind.Bet, w, '25.00');
+    expect(decideWith(w, referencing(Kind.Refund, w, '20.00', bet), bet)).toEqual(rejected(FailureCode.AmountMismatch));
+    expect(decideWith(w, referencing(Kind.Rollback, w, '25.01', bet), bet)).toEqual(rejected(FailureCode.AmountMismatch));
+  });
+
+  test('referência REJECTED ou FAILED → REFERENCE_REJECTED (I-15), inclusive para WIN e LOSS (I-46)', () => {
+    const w = wallet('100.00');
+    for (const status of [Status.Rejected, Status.Failed]) {
+      const bet = ref(Kind.Bet, w, '25.00', status);
+      expect(decideWith(w, referencing(Kind.Refund, w, '25.00', bet), bet)).toEqual(rejected(FailureCode.ReferenceRejected));
+      expect(decideWith(w, referencing(Kind.Rollback, w, '25.00', bet), bet)).toEqual(rejected(FailureCode.ReferenceRejected));
+      expect(decideWith(w, referencing(Kind.Win, w, '25.00', bet), bet)).toEqual(rejected(FailureCode.ReferenceRejected));
+      expect(decideWith(w, referencing(Kind.Loss, w, '25.00', bet), bet)).toEqual(rejected(FailureCode.ReferenceRejected));
+    }
+  });
+
+  test('referenceAlreadyReversed → ALREADY_REVERSED (I-16), para REFUND e ROLLBACK', () => {
+    const w = wallet('100.00');
+    const bet = ref(Kind.Bet, w, '25.00');
+    expect(decideWith(w, referencing(Kind.Refund, w, '25.00', bet), bet, true)).toEqual(rejected(FailureCode.AlreadyReversed));
+    expect(decideWith(w, referencing(Kind.Rollback, w, '25.00', bet), bet, true)).toEqual(rejected(FailureCode.AlreadyReversed));
+  });
+
+  test('referenceAlreadyReversed não afeta WIN nem LOSS (só reversões têm unicidade, I-46)', () => {
+    const w = wallet('100.00');
+    const bet = ref(Kind.Bet, w, '25.00');
+    expect(decideWith(w, referencing(Kind.Win, w, '25.00', bet), bet, true)).toEqual({ type: 'APPLY', direction: LedgerDirection.Credit });
+    expect(decideWith(w, referencing(Kind.Loss, w, '25.00', bet), bet, true)).toEqual({ type: 'APPLY' });
+  });
+
+  test('ROLLBACK de WIN ou de REFUND acima do saldo → REVERSAL_WOULD_OVERDRAW, distinto de INSUFFICIENT_FUNDS (I-18)', () => {
+    const w = wallet('30.00');
+    const win = ref(Kind.Win, w, '50.00');
+    const refund = ref(Kind.Refund, w, '50.00');
+    expect(decideWith(w, referencing(Kind.Rollback, w, '50.00', win), win)).toEqual(rejected(FailureCode.ReversalWouldOverdraw));
+    expect(decideWith(w, referencing(Kind.Rollback, w, '50.00', refund), refund)).toEqual(rejected(FailureCode.ReversalWouldOverdraw));
+    expect(FailureCode.ReversalWouldOverdraw).not.toBe(FailureCode.InsufficientFunds);
+  });
+
+  test('ROLLBACK de WIN igual ao saldo → aplica e zera', () => {
+    const w = wallet('50.00');
+    const win = ref(Kind.Win, w, '50.00');
+    expect(decideWith(w, referencing(Kind.Rollback, w, '50.00', win), win)).toEqual({ type: 'APPLY', direction: LedgerDirection.Debit });
+  });
+
+  test('REFUND e ROLLBACK de BET que passariam do teto → BALANCE_LIMIT_EXCEEDED (I-54)', () => {
+    const w = wallet('9999999999999990.00');
+    const bet = ref(Kind.Bet, w, '10.00');
+    expect(decideWith(w, referencing(Kind.Refund, w, '10.00', bet), bet)).toEqual(rejected(FailureCode.BalanceLimitExceeded));
+    expect(decideWith(w, referencing(Kind.Rollback, w, '10.00', bet), bet)).toEqual(rejected(FailureCode.BalanceLimitExceeded));
+  });
+
+  describe('precedência do I-44: MISMATCH > KIND > AMOUNT > REJECTED > ALREADY_REVERSED > saldo', () => {
+    // Cada caso viola a regra testada e todas as seguintes; só a primeira define o resultado.
+    test('REFERENCE_MISMATCH vence tipo, valor, estado, reversão e saldo', () => {
+      const w = wallet('0.00');
+      const win = ref(Kind.Win, w, '50.00', Status.Rejected, { roundId: 'round-1' });
+      const t = referencing(Kind.Refund, w, '99.00', win, { roundId: 'round-2' });
+      expect(decideWith(w, t, win, true)).toEqual(rejected(FailureCode.ReferenceMismatch));
+    });
+
+    test('INVALID_REFERENCE_KIND vence valor, estado, reversão e saldo', () => {
+      const w = wallet('0.00');
+      const win = ref(Kind.Win, w, '50.00', Status.Rejected);
+      expect(decideWith(w, referencing(Kind.Refund, w, '99.00', win), win, true)).toEqual(rejected(FailureCode.InvalidReferenceKind));
+    });
+
+    test('AMOUNT_MISMATCH vence estado, reversão e saldo', () => {
+      const w = wallet('0.00');
+      const win = ref(Kind.Win, w, '50.00', Status.Rejected);
+      expect(decideWith(w, referencing(Kind.Rollback, w, '99.00', win), win, true)).toEqual(rejected(FailureCode.AmountMismatch));
+    });
+
+    test('REFERENCE_REJECTED vence reversão e saldo', () => {
+      const w = wallet('0.00');
+      const win = ref(Kind.Win, w, '50.00', Status.Rejected);
+      expect(decideWith(w, referencing(Kind.Rollback, w, '50.00', win), win, true)).toEqual(rejected(FailureCode.ReferenceRejected));
+    });
+
+    test('ALREADY_REVERSED vence o saldo', () => {
+      const w = wallet('0.00');
+      const win = ref(Kind.Win, w, '50.00');
+      expect(decideWith(w, referencing(Kind.Rollback, w, '50.00', win), win, true)).toEqual(rejected(FailureCode.AlreadyReversed));
+    });
+
+    test('por último, o saldo', () => {
+      const w = wallet('0.00');
+      const win = ref(Kind.Win, w, '50.00');
+      expect(decideWith(w, referencing(Kind.Rollback, w, '50.00', win), win)).toEqual(rejected(FailureCode.ReversalWouldOverdraw));
+    });
+  });
+});

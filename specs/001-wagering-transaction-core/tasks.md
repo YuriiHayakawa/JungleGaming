@@ -476,7 +476,7 @@ códigos `AMOUNT_MISMATCH`, `ALREADY_REVERSED`, `REVERSAL_WOULD_OVERDRAW` e `REF
 
 ### Testes da User Story 5 (escrever primeiro; devem falhar)
 
-- [ ] T091 [P] [US5] Estender `test/unit/wager-rules.test.ts` com as reversões (I-12, I-14 a I-18, FR-019 a FR-026):
+- [X] T091 [P] [US5] Estender `test/unit/wager-rules.test.ts` com as reversões (I-12, I-14 a I-18, FR-019 a FR-026):
   - REFUND de BET → `Apply(CREDIT)`;
   - ROLLBACK de BET → CREDIT; de WIN → DEBIT; de REFUND → DEBIT;
   - REFUND de algo que não é BET → `INVALID_REFERENCE_KIND`; ROLLBACK de LOSS, de ROLLBACK ou de OPENING → `INVALID_REFERENCE_KIND`;
@@ -485,7 +485,7 @@ códigos `AMOUNT_MISMATCH`, `ALREADY_REVERSED`, `REVERSAL_WOULD_OVERDRAW` e `REF
   - `referenceAlreadyReversed` → `ALREADY_REVERSED`;
   - ROLLBACK de WIN acima do saldo → `REVERSAL_WOULD_OVERDRAW`, distinto de `INSUFFICIENT_FUNDS`;
   - **precedência do I-44**: `REFERENCE_MISMATCH` > `INVALID_REFERENCE_KIND` > `AMOUNT_MISMATCH` > `REFERENCE_REJECTED` > `ALREADY_REVERSED` > saldo.
-- [ ] T092 [P] [US5] Escrever `test/integration/reversals.test.ts` (US5 cenários 1 a 9; FR-019 a FR-026, I-12 a I-18). Cada teste termina com `assertWalletMatchesLedger`.
+- [X] T092 [P] [US5] Escrever `test/integration/reversals.test.ts` (US5 cenários 1 a 9; FR-019 a FR-026, I-12 a I-18). Cada teste termina com `assertWalletMatchesLedger`.
   - REFUND de BET → CREDIT;
   - ROLLBACK de WIN → DEBIT;
   - REFUND seguido de ROLLBACK da mesma BET → 422 `ALREADY_REVERSED`, sem crédito extra;
@@ -495,7 +495,7 @@ códigos `AMOUNT_MISMATCH`, `ALREADY_REVERSED`, `REVERSAL_WOULD_OVERDRAW` e `REF
   - REFUND de BET REJECTED → 422 `REFERENCE_REJECTED`;
   - REFUND ou ROLLBACK sem referência → 400;
   - ROLLBACK de um REFUND → DEBIT.
-- [ ] T093 [P] [US5] Escrever `test/concurrency/reversal-race.test.ts` com `startCluster({ size: 3 })` (US5 cenário 4; SC-003, FR-025, I-16, falha eliminatória 3). Repetir 20 vezes:
+- [X] T093 [P] [US5] Escrever `test/concurrency/reversal-race.test.ts` com `startCluster({ size: 3 })` (US5 cenário 4; SC-003, FR-025, I-16, falha eliminatória 3). Repetir 20 vezes:
   - um REFUND e um ROLLBACK simultâneos da mesma BET PROCESSED;
   - no máximo 1 PROCESSED; o outro termina REJECTED `ALREADY_REVERSED`;
   - exatamente 1 CREDIT de reversão;
@@ -503,13 +503,13 @@ códigos `AMOUNT_MISMATCH`, `ALREADY_REVERSED`, `REVERSAL_WOULD_OVERDRAW` e `REF
 
 ### Implementação da User Story 5
 
-- [ ] T094 [US5] Ativar em `src/wagering/domain/wager-rules.service.ts` as regras de REFUND e ROLLBACK nos passos 5.2 (`INVALID_REFERENCE_KIND` por kind, `AMOUNT_MISMATCH`), 5.3 (REJECTED ou FAILED → `REFERENCE_REJECTED`), 5.4 (`ALREADY_REVERSED`) e 5.5 (`REVERSAL_WOULD_OVERDRAW`), com a direção inversa do ROLLBACK. Faz o T091 passar (I-44)
-- [ ] T095 [US5] Estender `src/wagering/infrastructure/mikro-orm-wager-transaction.repository.ts` com `existsProcessedReversal(em, referenceTransactionId)`: `SELECT 1 ... WHERE reference_transaction_id = ? AND kind IN ('REFUND','ROLLBACK') AND status = 'PROCESSED'`, que usa `wager_tx_single_reversal_uq` (I-16)
-- [ ] T096 [US5] Estender `src/wagering/application/submit-wager-transaction.use-case.ts` (R-10, R-12, FR-025):
+- [X] T094 [US5] Ativar em `src/wagering/domain/wager-rules.service.ts` as regras de REFUND e ROLLBACK nos passos 5.2 (`INVALID_REFERENCE_KIND` por kind, `AMOUNT_MISMATCH`), 5.3 (REJECTED ou FAILED → `REFERENCE_REJECTED`), 5.4 (`ALREADY_REVERSED`) e 5.5 (`REVERSAL_WOULD_OVERDRAW`), com a direção inversa do ROLLBACK. Faz o T091 passar (I-44)
+- [X] T095 [US5] Estender `src/wagering/infrastructure/mikro-orm-wager-transaction.repository.ts` com `existsProcessedReversal(em, referenceTransactionId)`: `SELECT 1 ... WHERE reference_transaction_id = ? AND kind IN ('REFUND','ROLLBACK') AND status = 'PROCESSED'`, que usa `wager_tx_single_reversal_uq` (I-16)
+- [X] T096 [US5] Estender `src/wagering/application/submit-wager-transaction.use-case.ts` (R-10, R-12, FR-025):
   - sob o lock, consulta `existsProcessedReversal` só quando a referência é PROCESSED e o kind é REFUND ou ROLLBACK;
   - em `reversal-race` (`23505` em `wager_tx_single_reversal_uq`), repete o use case **uma** vez; se repetir, `InternalError`. A repetição recomeça do zero, como no T132: transação de domínio, ids e eventos novos e fork novo. **Teste de integração** (em `test/integration/reversals.test.ts` ou arquivo próprio): o `23505` do índice de reversão provocado só na 1ª passagem termina com 1 reversão, 1 lançamento e `assertWalletMatchesLedger` verde.
   Faz o T092 e o T093 passarem.
-- [ ] T130 [US5] Revisar o diff da US5 contra `specs/001-wagering-transaction-core/review-checklist.md` (gate de Revisão da constitution, Princípios II a V), com atenção à reversão única garantida pelo índice parcial e à checagem sob o lock da wallet; registrar o resultado item a item; item reprovado volta para a task de origem antes do checkpoint
+- [X] T130 [US5] Revisar o diff da US5 contra `specs/001-wagering-transaction-core/review-checklist.md` (gate de Revisão da constitution, Princípios II a V), com atenção à reversão única garantida pelo índice parcial e à checagem sob o lock da wallet; registrar o resultado item a item; item reprovado volta para a task de origem antes do checkpoint
 
 **Checkpoint US5**: `bun test test/unit/wager-rules.test.ts && bun test --preload ./test/support/db-setup.preload.ts test/integration/reversals.test.ts test/concurrency/reversal-race.test.ts`, com o T130 concluído.
 
