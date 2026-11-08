@@ -21,6 +21,7 @@ export interface DecideInput {
 }
 
 const reject = (code: FailureCode): WagerDecision => ({ type: 'REJECT', code });
+const PENDING_REFERENCE: WagerDecision = { type: 'PENDING_REFERENCE' };
 
 /** Tipos que cada kind pode referenciar (I-13, I-14, I-46). */
 const ALLOWED_REFERENCE_KINDS: Partial<Record<WagerTransactionKind, readonly WagerTransactionKind[]>> = {
@@ -52,8 +53,9 @@ function sameScope(transaction: WagerTransaction, reference: WagerTransaction): 
  *   5.3 estado da referência: REJECTED/FAILED → REFERENCE_REJECTED; ausente/PENDING/PENDING_REFERENCE → pendente
  *   5.4 ALREADY_REVERSED
  *   5.5 saldo: INSUFFICIENT_FUNDS (BET) ou REVERSAL_WOULD_OVERDRAW (reversão que debita); BALANCE_LIMIT_EXCEEDED (crédito)
- * Ativos: 5.1 e 5.5 (US2), 5.2 (US4 e US5), 5.3 para REJECTED/FAILED e 5.4 (US5). A referência ausente ou pendente
- * (passo 5.3 → PENDING_REFERENCE) entra na US6 (T100).
+ * Todos os passos estão ativos: 5.1 e 5.5 (US2), 5.2 (US4 e US5), 5.3 e 5.4 (US5 e US6). Consequência da ordem:
+ * uma referência existente porém pendente e inconsistente é rejeitada na hora pelo código de consistência, sem passar
+ * por PENDING_REFERENCE (I-44).
  */
 export class WagerRulesService {
   decide(input: DecideInput): WagerDecision {
@@ -72,11 +74,15 @@ export class WagerRulesService {
   }
 
   /**
-   * Passos 5.2 a 5.4 do I-44. Ativos: 5.2 (US4, T089; reversões em T094), 5.3 para REJECTED/FAILED e 5.4 (US5,
-   * T094). A referência ausente ou pendente entra em T100 (US6).
+   * Passos 5.2 a 5.4 do I-44, para toda transação que informa referência (REFUND e ROLLBACK sempre; WIN e LOSS
+   * quando opcionalmente a informam, I-46). Devolve `undefined` quando a referência está PROCESSED e nada barrou:
+   * aí seguem as regras de saldo (5.5), que usam a referência para definir a direção do ROLLBACK.
    */
   private referenceRules({ transaction, reference, referenceAlreadyReversed }: DecideInput): WagerDecision | undefined {
-    if (transaction.referenceExternalTransactionId === undefined || !reference) return undefined;
+    if (transaction.referenceExternalTransactionId === undefined) return undefined;
+
+    // 5.3 referência ausente → aguarda (I-15). Sem referência carregada não há o que checar em 5.2.
+    if (!reference) return PENDING_REFERENCE;
 
     // 5.2 consistência da referência existente, em qualquer estado (I-14, I-17, I-46)
     if (!sameScope(transaction, reference)) return reject(FailureCode.ReferenceMismatch);
@@ -86,9 +92,16 @@ export class WagerRulesService {
       return reject(FailureCode.AmountMismatch);
     }
 
-    // 5.3 estado da referência (I-15): rejeitada ou falha → REFERENCE_REJECTED
-    if (reference.status === WagerTransactionStatus.Rejected || reference.status === WagerTransactionStatus.Failed) {
-      return reject(FailureCode.ReferenceRejected);
+    // 5.3 estado da referência (I-15): rejeitada ou falha → REFERENCE_REJECTED; ainda não aplicada → aguarda
+    switch (reference.status) {
+      case WagerTransactionStatus.Rejected:
+      case WagerTransactionStatus.Failed:
+        return reject(FailureCode.ReferenceRejected);
+      case WagerTransactionStatus.Pending:
+      case WagerTransactionStatus.PendingReference:
+        return PENDING_REFERENCE;
+      case WagerTransactionStatus.Processed:
+        break;
     }
 
     // 5.4 uma reversão por transação, REFUND e ROLLBACK juntos (I-16); WIN e LOSS não têm unicidade (I-46)

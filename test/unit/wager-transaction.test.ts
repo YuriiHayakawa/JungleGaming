@@ -171,6 +171,19 @@ describe('transições válidas do I-11', () => {
     expect(tx.isTerminal()).toBe(false);
   });
 
+  test('markPendingReference (T097): sem referência resolvida, sem processedAt, updatedAt = at e nextAttemptAt copiado', () => {
+    const tx = pending(Kind.Refund);
+    const now = at();
+    const next = new Date(now.getTime() + 5000);
+    tx.markPendingReference(brl('42.00'), next, now);
+    next.setTime(0); // mutar a data de entrada não altera a transação
+    expect(tx.nextReferenceAttemptAt?.getTime()).toBe(now.getTime() + 5000);
+    expect(tx.referenceAttempts).toBe(0);
+    expect(tx.referenceTransactionId).toBeUndefined();
+    expect(tx.processedAt).toBeUndefined();
+    expect(tx.updatedAt.getTime()).toBe(now.getTime());
+  });
+
   test('PENDING → FAILED com código; fail() a partir de PENDING funciona', () => {
     const tx = pending();
     tx.fail(FailureCode.InternalError, at());

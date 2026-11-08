@@ -20,6 +20,7 @@ import type { Wallet } from '../../wallets/domain/wallet.ts';
 import type { MikroOrmLedgerRepository } from '../../wallets/infrastructure/mikro-orm-ledger.repository.ts';
 import type { MikroOrmWalletRepository } from '../../wallets/infrastructure/mikro-orm-wallet.repository.ts';
 import { WagerTransactionProcessed } from '../domain/events/wager-transaction-processed.event.ts';
+import { WagerTransactionPendingReference } from '../domain/events/wager-transaction-pending-reference.event.ts';
 import { WagerTransactionRejected } from '../domain/events/wager-transaction-rejected.event.ts';
 import { WagerRulesService, type WagerDecision } from '../domain/wager-rules.service.ts';
 import { WagerTransaction, WagerTransactionStatus, type WagerTransactionKind } from '../domain/wager-transaction.ts';
@@ -29,6 +30,9 @@ import { toTransactionResult, type TransactionResult } from './transaction-resul
 
 /** Uma única repetição do use case depois de 23505 no índice de reversão única (R-12). */
 const MAX_REVERSAL_RACE_RETRIES = 1;
+
+/** Base do backoff do worker de PENDING_REFERENCE (I-21): a 1ª tentativa fica para a criação + 5 s. */
+const PENDING_REFERENCE_FIRST_ATTEMPT_DELAY_MS = 5_000;
 
 /** Payload de negócio já validado e normalizado pela borda (HTTP agora; fila na feature de mensageria). */
 export interface SubmitWagerTransactionInput {
@@ -319,9 +323,15 @@ export class SubmitWagerTransactionUseCase {
         events.push(WagerTransactionProcessed.from(transaction, wallet.version, context()));
         return events;
       }
-      case 'PENDING_REFERENCE':
-        // As regras só devolvem PENDING_REFERENCE com o passo 5.3 ativo; o tratamento entra no T101 (US6).
-        throw new Error('PENDING_REFERENCE is not produced before US6 (T101)');
+      case 'PENDING_REFERENCE': {
+        // Referência ausente ou ainda não aplicada (I-15, FR-023): aceita sem tocar na wallet, sem lançamento e sem
+        // failureCode; o saldo observado é o atual (FR-036). A 1ª tentativa do worker (feature 2) fica agendada para
+        // a criação + 5 s, a base do backoff do I-21; `createdAt` é o `clock.now()` do recebimento da requisição.
+        const nextAttemptAt = new Date(transaction.createdAt.getTime() + PENDING_REFERENCE_FIRST_ATTEMPT_DELAY_MS);
+        transaction.markPendingReference(wallet.balance, nextAttemptAt, at.now);
+        await this.deps.transactions.insert(em, transaction);
+        return [WagerTransactionPendingReference.from(transaction, context())];
+      }
     }
   }
 }

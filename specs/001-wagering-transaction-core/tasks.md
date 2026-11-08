@@ -523,12 +523,12 @@ códigos `AMOUNT_MISMATCH`, `ALREADY_REVERSED`, `REVERSAL_WOULD_OVERDRAW` e `REF
 
 ### Testes da User Story 6 (escrever primeiro; devem falhar)
 
-- [ ] T097 [P] [US6] Estender `test/unit/wager-rules.test.ts` com o passo 5.3 do I-44 (I-15, I-44, FR-023, FR-024):
+- [X] T097 [P] [US6] Estender `test/unit/wager-rules.test.ts` com o passo 5.3 do I-44 (I-15, I-44, FR-023, FR-024):
   - referência ausente, PENDING ou PENDING_REFERENCE → `PendingReference`;
   - **precedência**: referência existente, PENDING_REFERENCE e com rodada diferente → `REFERENCE_MISMATCH`; REFUND com valor diferente e referência pendente → `AMOUNT_MISMATCH`;
   - `WALLET_PLAYER_MISMATCH` prevalece mesmo com a referência ausente.
   Estender também `test/unit/wager-transaction.test.ts`: `markPendingReference(observedBalance, nextAttemptAt)` define `referenceAttempts` 0 e `nextReferenceAttemptAt` (I-11, I-21).
-- [ ] T098 [P] [US6] Escrever `test/integration/pending-reference.test.ts` (US6 cenários 1 a 3; FR-023, FR-045, I-15, I-21, I-26, I-39). Cada teste termina com `assertWalletMatchesLedger`.
+- [X] T098 [P] [US6] Escrever `test/integration/pending-reference.test.ts` (US6 cenários 1 a 3; FR-023, FR-045, I-15, I-21, I-26, I-39). Cada teste termina com `assertWalletMatchesLedger`.
   - ROLLBACK de um id externo inexistente → 202 `PENDING_REFERENCE`, saldo observado inalterado, sem `failureCode`, sem lançamento;
   - por SQL: `reference_attempts` 0, `next_reference_attempt_at` = criação + 5 s, e `WagerTransactionPendingReference` na outbox;
   - **payload desse evento** (FR-047): `eventId` igual ao `id` da linha da outbox; `aggregateId` = `walletId`; `correlationId` = o da requisição; `occurredAt` em ISO-8601; `eventType` "WagerTransactionPendingReference"; `version` 1; `data` com os identificadores, `kind`, `money` como string, `referenceExternalTransactionId` e `nextAttemptAt` igual ao `next_reference_attempt_at` gravado; nenhum `WalletBalanceChanged`;
@@ -538,9 +538,9 @@ códigos `AMOUNT_MISMATCH`, `ALREADY_REVERSED`, `REVERSAL_WOULD_OVERDRAW` e `REF
 
 ### Implementação da User Story 6
 
-- [ ] T099 [P] [US6] Implementar `src/wagering/domain/events/wager-transaction-pending-reference.event.ts` (v1, `data` com os identificadores, `kind`, `money`, `referenceExternalTransactionId` e `nextAttemptAt`; I-33)
-- [ ] T100 [US6] Ativar em `src/wagering/domain/wager-rules.service.ts` o passo 5.3 para referência ausente, PENDING ou PENDING_REFERENCE → `PendingReference`, depois das checagens de consistência quando a referência existe. Faz o T097 passar (I-15, I-44)
-- [ ] T101 [US6] Estender `src/wagering/application/submit-wager-transaction.use-case.ts`: na decisão `PendingReference`, `markPendingReference` com `nextAttemptAt` = `clock.now()` + 5 s (base do I-21) e `observedBalance` = saldo atual; insere a transação e `WagerTransactionPendingReference`, sem tocar na wallet; `TransactionResult` com status 202 (I-39). Faz o T098 passar
+- [X] T099 [P] [US6] Implementar `src/wagering/domain/events/wager-transaction-pending-reference.event.ts` (v1, `data` com os identificadores, `kind`, `money`, `referenceExternalTransactionId` e `nextAttemptAt`; I-33)
+- [X] T100 [US6] Ativar em `src/wagering/domain/wager-rules.service.ts` o passo 5.3 para referência ausente, PENDING ou PENDING_REFERENCE → `PendingReference`, depois das checagens de consistência quando a referência existe. Faz o T097 passar (I-15, I-44)
+- [X] T101 [US6] Estender `src/wagering/application/submit-wager-transaction.use-case.ts`: na decisão `PendingReference`, `markPendingReference` com `nextAttemptAt` = `clock.now()` + 5 s (base do I-21) e `observedBalance` = saldo atual; insere a transação e `WagerTransactionPendingReference`, sem tocar na wallet; `TransactionResult` com status 202 (I-39). Faz o T098 passar
 
 **Checkpoint US6**: `bun test test/unit/wager-rules.test.ts test/unit/wager-transaction.test.ts && bun test --preload ./test/support/db-setup.preload.ts test/integration/pending-reference.test.ts`
 

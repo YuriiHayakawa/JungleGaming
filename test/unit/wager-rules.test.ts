@@ -450,3 +450,80 @@ describe('US5: reversões', () => {
     });
   });
 });
+
+// T097 — passo 5.3 do I-44: referência ausente ou pendente (US6; I-15, I-44, I-46; FR-023, FR-024).
+describe('US6: referência ausente ou pendente', () => {
+  const pendingReference = { type: 'PENDING_REFERENCE' as const };
+  /** Um id externo que nunca foi gravado: a referência não existe. */
+  const missing = (kind: Kind, w: Wallet, amount: string, overrides: TxOverrides = {}) =>
+    tx(kind, w, amount, { referenceExternalTransactionId: `missing-${ids.next()}`, ...overrides });
+
+  test('referência ausente → PendingReference, para REFUND, ROLLBACK, WIN e LOSS', () => {
+    const w = wallet('100.00');
+    for (const kind of [Kind.Refund, Kind.Rollback, Kind.Win, Kind.Loss]) {
+      expect(decideWith(w, missing(kind, w, '25.00'), undefined)).toEqual(pendingReference);
+    }
+  });
+
+  test('referência PENDING ou PENDING_REFERENCE → PendingReference', () => {
+    const w = wallet('100.00');
+    for (const status of [Status.Pending, Status.PendingReference]) {
+      const bet = ref(Kind.Bet, w, '25.00', status);
+      expect(decideWith(w, referencing(Kind.Refund, w, '25.00', bet), bet)).toEqual(pendingReference);
+      expect(decideWith(w, referencing(Kind.Rollback, w, '25.00', bet), bet)).toEqual(pendingReference);
+      expect(decideWith(w, referencing(Kind.Win, w, '25.00', bet), bet)).toEqual(pendingReference);
+    }
+    const refund = ref(Kind.Refund, w, '25.00', Status.PendingReference);
+    expect(decideWith(w, referencing(Kind.Rollback, w, '25.00', refund), refund)).toEqual(pendingReference);
+  });
+
+  test('pendência não depende do saldo nem do teto: a reversão de WIN pendente com saldo zero fica pendente', () => {
+    const empty = wallet('0.00');
+    const win = ref(Kind.Win, empty, '50.00', Status.PendingReference);
+    expect(decideWith(empty, referencing(Kind.Rollback, empty, '50.00', win), win)).toEqual(pendingReference);
+    const full = wallet('9999999999999999.99');
+    expect(decideWith(full, missing(Kind.Refund, full, '10.00'), undefined)).toEqual(pendingReference);
+  });
+
+  test('referenceAlreadyReversed é ignorado quando a referência não está PROCESSED', () => {
+    const w = wallet('100.00');
+    const bet = ref(Kind.Bet, w, '25.00', Status.PendingReference);
+    expect(decideWith(w, referencing(Kind.Refund, w, '25.00', bet), bet, true)).toEqual(pendingReference);
+  });
+
+  describe('precedência: consistência antes da pendência (I-44)', () => {
+    test('referência existente, PENDING_REFERENCE e com rodada diferente → REFERENCE_MISMATCH', () => {
+      const w = wallet('100.00');
+      const bet = ref(Kind.Bet, w, '25.00', Status.PendingReference, { roundId: 'round-1' });
+      expect(decideWith(w, referencing(Kind.Refund, w, '25.00', bet, { roundId: 'round-2' }), bet)).toEqual(
+        rejected(FailureCode.ReferenceMismatch),
+      );
+    });
+
+    test('REFUND com valor diferente e referência pendente → AMOUNT_MISMATCH', () => {
+      const w = wallet('100.00');
+      const bet = ref(Kind.Bet, w, '25.00', Status.PendingReference);
+      expect(decideWith(w, referencing(Kind.Refund, w, '20.00', bet), bet)).toEqual(rejected(FailureCode.AmountMismatch));
+    });
+
+    test('tipo inválido e referência pendente → INVALID_REFERENCE_KIND', () => {
+      const w = wallet('100.00');
+      const win = ref(Kind.Win, w, '25.00', Status.Pending);
+      expect(decideWith(w, referencing(Kind.Refund, w, '25.00', win), win)).toEqual(rejected(FailureCode.InvalidReferenceKind));
+    });
+
+    test('WALLET_PLAYER_MISMATCH prevalece mesmo com a referência ausente', () => {
+      const w = wallet('100.00');
+      expect(decideWith(w, missing(Kind.Rollback, w, '25.00', { playerId: 'intruder' }), undefined)).toEqual(
+        rejected(FailureCode.WalletPlayerMismatch),
+      );
+    });
+
+    test('CURRENCY_MISMATCH prevalece mesmo com a referência ausente', () => {
+      const w = wallet('100.00');
+      expect(decideWith(w, missing(Kind.Refund, w, '25.00', { currency: 'USD' }), undefined)).toEqual(
+        rejected(FailureCode.CurrencyMismatch),
+      );
+    });
+  });
+});
