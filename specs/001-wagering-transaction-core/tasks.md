@@ -442,13 +442,13 @@ BET da mesma rodada.
 
 ### Testes da User Story 4 (escrever primeiro; devem falhar)
 
-- [ ] T087 [P] [US4] Estender `test/unit/wager-rules.test.ts` com WIN e LOSS (I-12, I-13, I-14, I-46, FR-017, FR-018, FR-021, FR-022):
+- [X] T087 [P] [US4] Estender `test/unit/wager-rules.test.ts` com WIN e LOSS (I-12, I-13, I-14, I-46, FR-017, FR-018, FR-021, FR-022):
   - LOSS → `Apply` sem direção;
   - WIN → `Apply(CREDIT)`;
   - WIN ou LOSS referenciando uma BET com rodada, jogador, wallet ou moeda diferente → `REFERENCE_MISMATCH`;
   - WIN ou LOSS referenciando algo que não é BET → `INVALID_REFERENCE_KIND`;
   - `REFERENCE_MISMATCH` prevalece sobre `INVALID_REFERENCE_KIND`.
-- [ ] T088 [P] [US4] Escrever `test/integration/win-loss.test.ts` (US4 cenários 1 a 5; FR-017, FR-018, FR-021, FR-022, I-02, I-12, I-46). Cada teste termina com `assertWalletMatchesLedger`.
+- [X] T088 [P] [US4] Escrever `test/integration/win-loss.test.ts` (US4 cenários 1 a 5; FR-017, FR-018, FR-021, FR-022, I-02, I-12, I-46). Cada teste termina com `assertWalletMatchesLedger`.
   - WIN "50.00" sem referência → 201 e saldo +50 com CREDIT;
   - LOSS referenciando uma BET PROCESSED → 201, sem lançamento, saldo e `version` iguais, só `WagerTransactionProcessed` na outbox;
   - WIN com rodada R2 → 422 `REFERENCE_MISMATCH`;
@@ -457,8 +457,8 @@ BET da mesma rodada.
 
 ### Implementação da User Story 4
 
-- [ ] T089 [US4] Ativar em `src/wagering/domain/wager-rules.service.ts` o passo 5.2 do I-44 para WIN e LOSS (`REFERENCE_MISMATCH`, depois `INVALID_REFERENCE_KIND`) e a decisão de LOSS sem direção. Faz o T087 passar (I-14, I-46)
-- [ ] T090 [US4] Estender `src/wagering/application/submit-wager-transaction.use-case.ts`:
+- [X] T089 [US4] Ativar em `src/wagering/domain/wager-rules.service.ts` o passo 5.2 do I-44 para WIN e LOSS (`REFERENCE_MISMATCH`, depois `INVALID_REFERENCE_KIND`) e a decisão de LOSS sem direção. Faz o T087 passar (I-14, I-46)
+- [X] T090 [US4] Estender `src/wagering/application/submit-wager-transaction.use-case.ts`:
   - quando há referência, carrega-a sob o lock com `findByProviderAndExternalId(em, providerId, referenceExternalTransactionId)` e grava `reference_transaction_id` quando ela é resolvida;
   - LOSS PROCESSED não atualiza a wallet nem insere lançamento e registra só `WagerTransactionProcessed` (I-12, FR-018, FR-045).
   Faz o T088 passar.
@@ -682,7 +682,7 @@ parcial.
     - nenhum banco em memória: `pg-mem`, `better-sqlite3`, `bun:sqlite`, `:memory:`, nem classes `InMemory*Repository`.
     Os doubles de `test/support/fakes.ts` (`FixedClock`, `SequentialIdGenerator`) e o `exit` injetado nos failpoints continuam permitidos.
   - **`src/**`**: nenhum placeholder `$1` em SQL, nenhum `parseFloat(`, nenhum `Number(` aplicado a `amount` ou `balance`, e nenhuma rota de teste (controller ou rota com `test`, `debug` ou `__` no path).
-  - **`src/**/domain/**`**: imports só de `src/**/domain/**` (de qualquer módulo) e de `src/shared-kernel/domain/**`; nunca de `application`, `infrastructure`, `interfaces`, `platform`, `@nestjs` nem `@mikro-orm` (plan, "Structure Decision"). Autoteste: **passam** `import { Wallet } from '../../wallets/domain/wallet.ts'` e `import { Money } from '../../shared-kernel/domain/money.ts'` dentro de `src/wagering/domain/`; **falham** `import { x } from '../application/payload-hash.ts'`, `import { y } from '../../platform/persistence/pg-errors.ts'`, `import { z } from '../infrastructure/wager-transaction.schema.ts'`, `import { Inject } from '@nestjs/common'` e `import { LockMode } from '@mikro-orm/core'`.
+  - **`src/**/domain/**`**: imports só de `src/**/domain/**` (de qualquer módulo), de `src/shared-kernel/domain/**` e do pacote `decimal.js` (o tipo decimal exato sobre o qual o `Money` é construído, R-03; desvio aceito em 2026-11-08); nunca de `application`, `infrastructure`, `interfaces`, `platform`, `@nestjs`, `@mikro-orm` nem de qualquer outro pacote externo (plan, "Structure Decision"). Autoteste: **passam** `import { Wallet } from '../../wallets/domain/wallet.ts'`, `import { Money } from '../../shared-kernel/domain/money.ts'` dentro de `src/wagering/domain/` e `import Decimal from 'decimal.js'` dentro de `src/shared-kernel/domain/`; **falham** `import { x } from '../application/payload-hash.ts'`, `import { y } from '../../platform/persistence/pg-errors.ts'`, `import { z } from '../infrastructure/wager-transaction.schema.ts'`, `import { Inject } from '@nestjs/common'`, `import { LockMode } from '@mikro-orm/core'`, `import { z } from 'zod'` e `import Big from 'big.js'` (outro pacote externo, mesmo que também decimal).
   - **`src/**/domain/**` e `src/**/application/**`**: nenhum `new Date()` **sem argumento** (padrão `/\bnew\s+Date\s*\(\s*\)/`) e nenhum `Date.now(`, que leem o relógio; tempo só pela porta `Clock`. `new Date(x)` **com argumento** é permitido, porque só constrói uma data a partir de um valor já conhecido (ex.: `new Date(now.getTime() + delayMs)`). Nenhum `randomUUID(`, `randomUUIDv7(` (inclusive `Bun.randomUUIDv7(` e `crypto.randomUUID(`); ids só pela porta `IdGenerator` (constitution VI).
   - **Autoteste do guardrail**: cada regra roda contra trechos de código de exemplo embutidos no próprio teste, um que deve passar e um que deve falhar; por exemplo, `await expect(db.query('DELETE FROM wallet_ledger_entries')).rejects.toThrow()` passa na lista de permitidos e a mesma query fora de `expect` falha. Para a regra do relógio: **passam** `new Date(now.getTime() + 5000)`, `new Date(state.createdAt)` e `new Date('2026-11-07T00:00:00Z')`; **falham** `new Date()`, `new Date( )`, `const t = new Date ()` e `Date.now()`.
 - [ ] T119 [P] Escrever `README.md`: pré-requisitos (Bun 1.4.4, Docker); `bun install`; `docker compose up -d` e `--profile cluster`; variáveis de ambiente do `.env.example` e a hierarquia de timeouts; `migrate:up` e `migrate:down`; todos os scripts de teste e o que exigem; exemplos do quickstart §4; a limitação do `SIGTERM` gracioso no Windows; link para o `ARCHITECTURE.md` da raiz e para `docs/interpretacoes.md` (constitution IX, plan "Documentação")

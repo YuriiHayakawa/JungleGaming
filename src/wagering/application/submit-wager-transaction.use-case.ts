@@ -128,6 +128,11 @@ export class SubmitWagerTransactionUseCase {
       throw new InternalError({ cause: error });
     }
 
+    // Contexto de log (C1): só depois do commit, com o id que de fato ficou gravado. Uma tentativa desfeita pela
+    // unit of work (R-12) nunca deixa no contexto um id que não existe no banco. No replay sob o lock, é o id da
+    // linha existente, já gravado por `resolveExisting`.
+    setRequestContextValues({ transactionId: outcome.result.transactionId });
+
     // Depois do commit de um efeito novo e antes da resposta (testes de queda, R-16); no-op em produção (I-40).
     if (!outcome.replay) this.deps.failpoints.hit('after_commit_before_response');
     return outcome.result;
@@ -150,9 +155,14 @@ export class SubmitWagerTransactionUseCase {
     if (known) return { result: known, replay: true };
 
     const transaction = this.newTransaction(request);
-    const decision = this.rules.decide({ wallet, transaction, reference: undefined, referenceAlreadyReversed: false });
+    // data-model §3 passo 4: referência carregada sob o lock, com o EM da transação (R-19).
+    const reference = await this.loadReference(em, transaction);
+    const decision = this.rules.decide({ wallet, transaction, reference, referenceAlreadyReversed: false });
     const now = this.deps.clock.now();
-    const events = await this.record(em, decision, wallet, transaction, { correlationId: request.correlationId, now });
+    const events = await this.record(em, decision, wallet, transaction, reference, {
+      correlationId: request.correlationId,
+      now,
+    });
 
     await this.deps.outbox.append(em, events.map((event) => OutboxMessage.enqueue(event)));
     // Depois do lançamento e antes do commit: prova a atomicidade (SC-007); no-op em produção (I-40).
@@ -191,7 +201,18 @@ export class SubmitWagerTransactionUseCase {
     throw new IdempotencyConflictError();
   }
 
-  /** Nova instância PENDING, com id novo, a cada tentativa. */
+  /**
+   * A referência por (providerId da requisição, referenceExternalTransactionId), em qualquer estado, ou ausente
+   * (I-14, FR-021). Lida com o EM da transação, sob o lock da wallet desta requisição. A referência de outra wallet
+   * não é travada: as regras só usam dela atributos imutáveis para barrar o mismatch (plan, "Invariante de projeto").
+   */
+  private async loadReference(em: EntityManager, transaction: WagerTransaction): Promise<WagerTransaction | undefined> {
+    const externalId = transaction.referenceExternalTransactionId;
+    if (externalId === undefined) return undefined;
+    return (await this.deps.transactions.findByProviderAndExternalId(em, transaction.providerId, externalId)) ?? undefined;
+  }
+
+  /** Nova instância PENDING, com id novo, a cada tentativa. Não toca o contexto de log (só depois do commit). */
   private newTransaction(request: AcceptedRequest): WagerTransaction {
     const { command, payloadHash, correlationId, receivedAt } = request;
     const { input } = command;
@@ -211,8 +232,6 @@ export class SubmitWagerTransactionUseCase {
       correlationId,
       createdAt: receivedAt,
     });
-    // Contexto de log: o id da tentativa corrente (a que vier a ser confirmada é a última gravada aqui).
-    setRequestContextValues({ transactionId: transaction.id });
     return transaction;
   }
 
@@ -222,6 +241,7 @@ export class SubmitWagerTransactionUseCase {
     decision: WagerDecision,
     wallet: Wallet,
     transaction: WagerTransaction,
+    reference: WagerTransaction | undefined,
     at: { correlationId: string; now: Date },
   ): Promise<IntegrationEvent<unknown>[]> {
     const { ids } = this.deps;
@@ -238,7 +258,7 @@ export class SubmitWagerTransactionUseCase {
         const events: IntegrationEvent<unknown>[] = [];
         if (decision.direction === undefined) {
           // Sem efeito no saldo: PROCESSED sem lançamento e sem tocar a wallet (FR-018).
-          transaction.markProcessed(undefined, wallet.balance, at.now);
+          transaction.markProcessed(reference?.id, wallet.balance, at.now);
           await this.deps.transactions.insert(em, transaction);
         } else {
           const expectedVersion = wallet.version;
@@ -247,7 +267,7 @@ export class SubmitWagerTransactionUseCase {
             decision.direction === LedgerDirection.Debit
               ? wallet.debit(transaction.money, entryId, transaction.id, at.now)
               : wallet.credit(transaction.money, entryId, transaction.id, at.now);
-          transaction.markProcessed(undefined, wallet.balance, at.now);
+          transaction.markProcessed(reference?.id, wallet.balance, at.now);
           await this.deps.transactions.insert(em, transaction);
           await this.deps.wallets.updateBalance(em, wallet, expectedVersion);
           await this.deps.ledger.insert(em, entry);

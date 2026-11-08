@@ -22,6 +22,26 @@ export interface DecideInput {
 
 const reject = (code: FailureCode): WagerDecision => ({ type: 'REJECT', code });
 
+/** Tipos que cada kind pode referenciar (I-13, I-14, I-46). */
+const ALLOWED_REFERENCE_KINDS: Partial<Record<WagerTransactionKind, readonly WagerTransactionKind[]>> = {
+  [WagerTransactionKind.Win]: [WagerTransactionKind.Bet],
+  [WagerTransactionKind.Loss]: [WagerTransactionKind.Bet],
+};
+
+/**
+ * A referência pertence ao mesmo provider, jogador, wallet, moeda e rodada (I-14). O provider já é igual por
+ * construção (a busca é por providerId), mas é conferido de novo para a regra não depender de quem a chama.
+ */
+function sameScope(transaction: WagerTransaction, reference: WagerTransaction): boolean {
+  return (
+    reference.providerId === transaction.providerId &&
+    reference.playerId === transaction.playerId &&
+    reference.walletId === transaction.walletId &&
+    reference.money.currency === transaction.money.currency &&
+    reference.roundId === transaction.roundId
+  );
+}
+
 /**
  * Regras de negócio da submissão, puras e sem I/O (research R-10). Avalia o passo 5 do I-44 / FR-015 nesta ordem,
  * e a primeira regra violada define o resultado:
@@ -30,8 +50,8 @@ const reject = (code: FailureCode): WagerDecision => ({ type: 'REJECT', code });
  *   5.3 estado da referência: REJECTED/FAILED → REFERENCE_REJECTED; ausente/PENDING/PENDING_REFERENCE → pendente
  *   5.4 ALREADY_REVERSED
  *   5.5 saldo: INSUFFICIENT_FUNDS (BET) ou REVERSAL_WOULD_OVERDRAW (reversão que debita); BALANCE_LIMIT_EXCEEDED (crédito)
- * Ativos nesta entrega (US2): 5.1 e 5.5. Os passos 5.2 a 5.4 entram em `referenceRules` nas US4 (T089),
- * US5 (T094) e US6 (T100); até lá, a referência não é avaliada aqui.
+ * Ativos: 5.1 e 5.5 (US2) e 5.2 para WIN e LOSS (US4, T089). As regras de REFUND/ROLLBACK e os passos 5.3 e 5.4
+ * entram em `referenceRules` na US5 (T094) e na US6 (T100).
  */
 export class WagerRulesService {
   decide(input: DecideInput): WagerDecision {
@@ -49,8 +69,14 @@ export class WagerRulesService {
     return this.balanceRules(input);
   }
 
-  /** Passos 5.2 a 5.4 do I-44, ativados nas US4, US5 e US6 (T089, T094, T100). */
-  private referenceRules(_input: DecideInput): WagerDecision | undefined {
+  /** Passos 5.2 a 5.4 do I-44. Ativos: 5.2 para WIN e LOSS (US4, T089); REFUND/ROLLBACK e 5.3/5.4 em T094 e T100. */
+  private referenceRules({ transaction, reference }: DecideInput): WagerDecision | undefined {
+    if (transaction.referenceExternalTransactionId === undefined || !reference) return undefined;
+
+    // 5.2 consistência da referência existente, em qualquer estado (I-14, I-46)
+    if (!sameScope(transaction, reference)) return reject(FailureCode.ReferenceMismatch);
+    const allowed = ALLOWED_REFERENCE_KINDS[transaction.kind];
+    if (allowed && !allowed.includes(reference.kind)) return reject(FailureCode.InvalidReferenceKind);
     return undefined;
   }
 

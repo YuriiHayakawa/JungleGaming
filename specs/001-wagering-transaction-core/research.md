@@ -211,12 +211,21 @@ Todas as versões acima foram instaladas e exercitadas no spike de 2026-11-07 (s
 ### R-08 Idempotência: caminho rápido + releitura sob lock + unicidade no banco
 
 - **Decision**:
-  1. Fora de transação, ler por `(provider_id, idempotency_key)` e por `(provider_id, external_transaction_id)`;
-     se existir, responder replay (mesmo hash) ou 409 (FR-033, FR-034).
-  2. Sob o lock da wallet, reler as duas chaves, com o mesmo escopo por provedor; se existir, replay ou 409.
+  1. Fora de transação, ler numa **única consulta**
+     `WHERE provider_id = ? AND (idempotency_key = ? OR external_transaction_id = ?)`, que usa os dois índices
+     únicos e devolve no máximo duas linhas; se a linha da mesma chave existir, ela tem precedência. Mesmo hash →
+     replay; hash diferente, ou só o mesmo id externo sob outra chave → 409 (FR-033, FR-034).
+  2. Sob o lock da wallet, repetir a mesma consulta única, com o EM da transação; se existir, replay ou 409.
   3. `INSERT` da transação já no status final. Se ocorrer `23505` em `wager_tx_provider_idempotency_uq` ou em
-     `wager_tx_provider_external_uq`, a transação sofre rollback, as chaves são relidas fora dela e a resposta é
-     replay ou 409.
+     `wager_tx_provider_external_uq`, a transação sofre rollback, a mesma consulta única é refeita fora dela,
+     num fork novo, e a resposta é replay ou 409.
+- **Por que uma consulta só, num único snapshot**: em `READ COMMITTED` cada comando tem o próprio snapshot. Com
+  duas consultas separadas (primeiro por chave, depois por id externo), a primeira podia rodar antes do commit da
+  requisição concorrente idêntica e não achar nada, e a segunda, já depois do commit, achava a linha pelo id
+  externo. A requisição era então classificada como "mesmo id externo com outra chave" e recebia 409, embora
+  fosse idêntica à vencedora. No teste de 50 envios paralelos da mesma BET (T083), 5 de 50 respostas vinham 409
+  com as duas consultas. Com a consulta única, as duas linhas possíveis são vistas no mesmo snapshot, e o
+  resultado é 1 × 201 e 49 × 200, sem 409 (corrigido em 2026-11-07, durante a US3).
 - **Escopo por provedor (I-56)**: a chave de idempotência só é única dentro do provedor
   (`UNIQUE(provider_id, idempotency_key)`). Dois provedores podem usar a mesma `Idempotency-Key` com ids
   externos diferentes e as duas transações são processadas sem conflito. Como o `payloadHash` inclui o

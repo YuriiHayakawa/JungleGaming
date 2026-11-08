@@ -217,12 +217,15 @@ Ordem de avaliação do I-44 / FR-015, decisões em research R-06 a R-10:
 2. **Payload** (Zod): formatos (I-01, I-03, I-05, I-50), kind (OPENING → `OPENING_NOT_ALLOWED`, I-08), providerId
    "system" (I-07), referência por kind (I-13), zero só em LOSS (I-02). Normaliza `amount` e o UUID; calcula o
    `payloadHash` (I-25, R-09).
-3. **Caminho rápido** sem lock: busca por `(provider, chave)` e por `(provider, externalId)` → replay ou 409
-   (FR-033, FR-034, I-56).
+3. **Caminho rápido** sem lock: **uma única consulta**, num só snapshot, por `(provider, chave)` OU
+   `(provider, externalId)` → replay ou 409 (FR-033, FR-034, I-56). Duas consultas separadas podiam ver estados
+   diferentes (a primeira antes do commit da concorrente, a segunda depois) e devolver 409 a uma requisição
+   idêntica: 5 de 50 respostas no teste de 50 envios paralelos (research R-08).
 4. **Wallet** inexistente → 404 `WALLET_NOT_FOUND`, sem persistir (I-20).
 5. **Transação SQL** (data-model §3). Toda query aqui usa o EntityManager da transação, nunca outra conexão do
    pool (research R-19):
-   - `lock_timeout`, `FOR UPDATE` da wallet e releitura da idempotência por `(provider, chave)`;
+   - `lock_timeout`, `FOR UPDATE` da wallet e releitura da idempotência pela mesma consulta única por
+     `(provider, chave)` OU `(provider, externalId)`;
    - carga da referência e checagem de reversão existente;
    - `WagerRulesService.decide`;
    - `INSERT` da transação no status final, `UPDATE` da wallet com asserção de versão, `INSERT` do lançamento e
@@ -230,7 +233,7 @@ Ordem de avaliação do I-44 / FR-015, decisões em research R-06 a R-10:
    - failpoint `after_ledger_insert_before_commit`;
    - `COMMIT`.
 6. **Conflito tardio** `23505` em `wager_tx_provider_idempotency_uq` ou `wager_tx_provider_external_uq` →
-   releitura fora da transação → replay ou 409 (R-08). `23505` do
+   releitura fora da transação, pela mesma consulta única num fork novo → replay ou 409 (R-08). `23505` do
    índice de reversão → repetir 1 vez (R-12).
 7. **Resposta** (FR-054, FR-055, I-45): 201, 202 ou 422 com `TransactionResult`; replay com 200, 202 ou 422 e
    `idempotentReplay` true. Failpoint `after_commit_before_response` antes de responder.
