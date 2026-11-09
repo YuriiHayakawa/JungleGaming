@@ -590,26 +590,26 @@ parcial.
 
 ### Testes da User Story 9 (escrever primeiro; devem falhar)
 
-- [ ] T106 [P] [US9] Criar `test/support/tcp-proxy.ts`: proxy TCP entre a app e o PostgreSQL (`Bun.listen`/`Bun.connect`), com `cut()` para derrubar as conexões existentes e recusar novas, e `restore()` (R-17)
-- [ ] T107 [US9] Escrever `test/integration/db-unavailable.test.ts`, com a app apontando para o proxy do T106 (US9 cenários 1 a 3; FR-043, I-34, SC-007). Termina com `assertWalletMatchesLedger`.
+- [X] T106 [P] [US9] Criar `test/support/tcp-proxy.ts`: proxy TCP entre a app e o PostgreSQL (`Bun.listen`/`Bun.connect`), com `cut()` para derrubar as conexões existentes e recusar novas, e `restore()` (R-17)
+- [X] T107 [US9] Escrever `test/integration/db-unavailable.test.ts`, com a app apontando para o proxy do T106 (US9 cenários 1 a 3; FR-043, I-34, SC-007). Termina com `assertWalletMatchesLedger`.
   - com o proxy cortado, BET e `POST /wallets` → 503 `SERVICE_UNAVAILABLE`, `retryable` true e `Retry-After`;
   - corte no meio de uma transação → nenhuma linha parcial;
   - depois do `restore()`, sem reiniciar a app, o reenvio → 201 com `idempotentReplay` false e exatamente 1 efeito.
-- [ ] T108 [P] [US9] Escrever `test/integration/pool-acquire-timeout.test.ts`, o teste de timeout de aquisição do pool (FR-043, FR-059, I-51, spike S-09):
+- [X] T108 [P] [US9] Escrever `test/integration/pool-acquire-timeout.test.ts`, o teste de timeout de aquisição do pool (FR-043, FR-059, I-51, spike S-09):
   - `startApp` com `DB_POOL_MAX=1`, `WALLET_LOCK_TIMEOUT_MS=200`, `DB_POOL_ACQUIRE_TIMEOUT_MS=500` e `HTTP_SERVER_TIMEOUT_MS=3000`;
   - a única conexão é ocupada por `app.get(ORM).em.fork().execute('select pg_sleep(2)')`, pelo handle in-process que o `app-harness` já expõe;
   - **sem endpoint de teste e sem failpoint**: nada novo no código de produção. Nenhuma rota de teste existe em `src/` (o T118 verifica), e o teste não usa nenhum failpoint. Os failpoints da feature (`after_ledger_insert_before_commit`, `after_commit_before_response`), usados no T070 e no T109, ficam atrás da porta `FAILPOINTS`, que não faz nada com `NODE_ENV=production` (I-40, T014, T027);
   - a BET submetida → 503 `SERVICE_UNAVAILABLE` com `Retry-After` em 450–1500 ms, sem efeito;
   - depois de liberar a conexão (fim do `pg_sleep`), o reenvio → 201 com exatamente 1 efeito;
   - termina com `assertWalletMatchesLedger`.
-- [ ] T109 [P] [US9] Escrever `test/concurrency/crash-recovery.test.ts` (SC-007, I-40, R-16):
+- [X] T109 [P] [US9] Escrever `test/concurrency/crash-recovery.test.ts` (SC-007, I-40, R-16):
   - uma instância com `FAILPOINT=after_commit_before_response` recebe uma BET; a conexão cai e o processo sai;
   - outra instância, sem failpoint e no mesmo banco, recebe o reenvio → 200 com o mesmo `transactionId` do commit, `idempotentReplay` true e exatamente 1 DEBIT;
   - termina com `assertWalletMatchesLedger`.
 
 ### Implementação da User Story 9
 
-- [ ] T110 [US9] Endurecer `src/platform/persistence/unit-of-work.ts` e `src/platform/persistence/pg-errors.ts` (R-12, FR-043, I-34):
+- [X] T110 [US9] Endurecer `src/platform/persistence/unit-of-work.ts` e `src/platform/persistence/pg-errors.ts` (R-12, FR-043, I-34):
   - erro durante o `COMMIT` (perda de conexão) e erro de conexão no meio da transação → `ServiceUnavailableError` depois do rollback;
   - leituras fora de transação, como o caminho rápido e a busca da wallet, também passam pelo classificador;
   - a app continua no ar com o banco fora e volta a atender quando ele volta, sem reinício (o pool descarta conexões quebradas).
