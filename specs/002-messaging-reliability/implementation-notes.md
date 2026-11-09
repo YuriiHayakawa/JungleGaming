@@ -225,3 +225,53 @@ Diff revisado: porta `METRICS` no consumidor, no submit, no recorder, no worker,
 | Ack só depois do commit | OK | O `dlq_total` e o `retries_total` são registrados depois das chamadas ao SQS, dentro do `apply`; a ordem ack/DLQ não mudou. |
 | DLQ antes de apagar | OK | `dlq_total` só depois do `send` à DLQ e do `delete`. |
 | Publisher marca só depois do SendMessage | OK | Só um `retries_total` no ramo de falha de envio; a marca não mudou. |
+
+## Polish
+
+### T084 — guardrails estendidos
+
+`test/unit/conventions.test.ts` ganhou quatro regras, cada uma com autoteste (exemplos que passam e que falham), além da
+varredura de `src/**` e `test/**`:
+
+- (f) em `test/integration/**` e `test/concurrency/**`: nenhum import de `fake-sqs`, nenhuma classe `InMemory*Sqs*`/`Fake*Sqs*`,
+  nenhum `spyOn` em objeto `sqs` e nenhum `mock.module('@aws-sdk/…')`;
+- (g) em `src/**`: `@aws-sdk/` só em `src/messaging/infrastructure/**` (import estático, dinâmico e re-export);
+- (h) em `src/**/domain/**` e `src/**/application/**`: nenhum `Math.random(`;
+- (i) em `test/**`: nenhum `PurgeQueue`/`PurgeQueueCommand`/`purgeQueue(`.
+
+Resultado: 39 testes, nenhuma violação no repositório.
+
+### T085 — revisão final do diff da feature contra o review-checklist.md
+
+Diff revisado: `330e78c..HEAD` (Fundação, US1 a US7, ajustes N-22 a N-24) mais o T084; 49 arquivos de `src/`/`migrations/`
+e 53 de `test/`. Os itens já revisados por história (T047, T057, T065, T076 e as tabelas da US5, US6 e US7) foram
+conferidos de novo sobre o código final, com as varreduras abaixo.
+
+| Item | Resultado | Evidência no código final |
+|------|-----------|---------------------------|
+| Dinheiro sem `number` | OK | Varredura do diff inteiro de `src/` sem `amount`/`balance`/`money` tipados como `number`, sem `Number(` em dinheiro e sem `parseFloat(` (guardrail (c) verde). Saldo e lançamentos só por `Money`; o envelope da fila reusa o `moneySchema` (string); as métricas não carregam valores. |
+| Saldo só sob lock | OK | As únicas escritas que mudam saldo ou status de transação: `TransactionRecorder.record` (chamado pelo submit e pelo worker, sempre depois de `wallets.lockById(em, …)` e com o EM da transação), `scheduleNextAttempt` e `markFailed` (worker, depois do lock da wallet). O claim do worker só mexe em `next_reference_attempt_at`/`updated_at`; a antecipação também, dentro da transação que já travou a wallet de origem. |
+| Unicidade no banco | OK | `inbox_messages_pk` (23505 → `inbox-race`, relido fora da transação desfeita); idempotência nos índices da 001; `wager_tx_single_reversal_uq` (uma repetição no submit e no worker). "Concluída uma vez" no worker: lock + releitura + `UPDATE … WHERE status = 'PENDING_REFERENCE'` com 1 linha exigida. |
+| Outbox na mesma transação | OK | Submit (HTTP e fila) e worker: `outbox.append(em, …)` com o EM da transação do efeito, antes do commit; na fila, a inbox entra no mesmo commit. O publicador só lê linhas confirmadas, num claim próprio. |
+| Triggers presentes | OK | `Migration20261108000100` (inbox, `inbox_no_update_delete_trg`, `inbox_no_truncate_trg`) e `Migration20261108000200` (índices parciais do worker), com `up` e `down`; guardas da 001 intactas (`schema-guards` e `migrations` verdes). |
+| Sem mock em integração e concorrência | OK | Guardrails (b) e (f) verdes; integração e concorrência só com PostgreSQL e MiniStack reais; indisponibilidade por proxies TCP reais; nenhum `TRUNCATE`/`DELETE`/`PurgeQueue` como limpeza (guardrails (a) e (i)). |
+| Sem relógio nem id no domínio | OK | Guardrails (e) e (h) verdes: tempo pela `Clock`, ids pela `IdGenerator`, jitter pela `RandomSource`. |
+| Ordem de lock wallet primeiro | OK | Ver "Saldo só sob lock". Exceções previstas: claim do worker (`SKIP LOCKED`, nunca espera) e antecipação (depois do lock da wallet de origem). O claim do publicador não toca wallets nem transações. |
+| Ack só depois do commit | OK | `DeleteMessage` só em dois pontos de `consume-wager-message.use-case.ts`: no `ack` (depois de `process` resolver, isto é, depois do commit; failpoint `after_commit_before_ack` entre os dois) e depois do envio aceito à DLQ. O término devolve visibilidade, nunca apaga (US5). |
+| DLQ antes de apagar da fila principal | OK | `apply`, ramo `dlq`: `await sqs.send(dlq, { …, attributes: { errorCode, errorClass, … } })` e só então `sqs.delete(...)`; se o envio falha, a exceção sobe e a mensagem fica. |
+| Publisher marca como publicado só depois do SendMessage | OK | `published_at` é gravado num único ponto (`markPublished`, `WHERE published_at IS NULL`), chamado depois do `await sqs.send(...)`; falha de envio só reagenda o evento que falhou e devolve os não tentados (N-22), sem marcar. |
+
+Nenhum item reprovado; nenhuma task voltou para a origem.
+
+### T086 — suíte completa
+
+`docker compose up -d postgres sqs` e `bun run typecheck && bun run test` (2026-11-09): saída 0 em 229 s.
+
+| Suíte | Testes | Arquivos | Duração |
+|-------|--------|----------|---------|
+| typecheck | ok | — | — |
+| unit (inclui o T084) | 597 pass, 0 fail | 31 | 0,9 s |
+| integration | 216 pass, 0 fail | 36 | 153,4 s |
+| concurrency | 23 pass, 0 fail | 18 | 70,6 s |
+
+T087 (quickstart de ponta a ponta) e T088 (README/ARCHITECTURE) não fazem parte desta rodada.

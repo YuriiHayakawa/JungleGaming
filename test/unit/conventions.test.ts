@@ -244,6 +244,51 @@ export const clockAndIdsRule: Rule = (file, source) => {
   ];
 };
 
+// ---- feature 002 (T084; R-33; constitution VII)
+
+const SQS_FAKE_PATTERNS: Array<[string, RegExp]> = [
+  ['import do fake-sqs', /(?:from|import)\s*\(?\s*['"][^'"]*\bfake-sqs(\.ts)?['"]/],
+  ['classe InMemory*Sqs* ou Fake*Sqs*', /\b(InMemory|Fake)\w*Sqs\w*\b/],
+  ['spyOn em objeto sqs', /spyOn\(\s*[\w.]*sqs\w*\s*,/i],
+  ['mock.module de @aws-sdk', /mock\.module\(\s*['"]@aws-sdk\//],
+];
+
+/**
+ * (f) test/integration/** e test/concurrency/**: nenhum SQS falso. O fake de `SqsPort` (`test/support/fake-sqs.ts`)
+ * só vale em test/unit; integração e concorrência usam o MiniStack real (R-31, R-33).
+ */
+export const noSqsFakesRule: Rule = (file, source) => {
+  if (!file.startsWith('test/integration/') && !file.startsWith('test/concurrency/')) return [];
+  const code = stripComments(source);
+  return SQS_FAKE_PATTERNS.flatMap(([label, pattern]) => matchAll(file, code, `sqs: ${label}`, pattern, source));
+};
+
+/** (g) src/**: `@aws-sdk/` só é importado em src/messaging/infrastructure/** (porta SqsPort; R-21, R-33). */
+export const awsSdkImportsRule: Rule = (file, source) => {
+  if (!file.startsWith('src/') || file.startsWith('src/messaging/infrastructure/')) return [];
+  const code = stripComments(source);
+  const violations: Violation[] = [];
+  for (const pattern of IMPORT_SPECS) {
+    for (const m of code.matchAll(pattern)) {
+      const spec = m[1]!;
+      if (spec.startsWith('@aws-sdk/')) {
+        violations.push({ file, line: lineAt(code, m.index), rule: `aws-sdk: import fora de messaging/infrastructure (${spec})`, text: lineText(source, m.index) });
+      }
+    }
+  }
+  return violations;
+};
+
+/** (h) src/**\/domain/** e src/**\/application/**: nenhum `Math.random(`; jitter pela porta RandomSource (R-25). */
+export const randomRule: Rule = (file, source) => {
+  if (!/^src\/[^/]+\/(domain|application)\//.test(file)) return [];
+  return matchAll(file, stripComments(source), 'random: Math.random()', /\bMath\.random\s*\(/, source);
+};
+
+/** (i) test/**: nenhum PurgeQueue (limpeza de fila); cada arquivo usa filas próprias, apagadas no fim (R-31). */
+export const purgeQueueRule: Rule = (file, source) =>
+  file.startsWith('test/') ? matchAll(file, stripComments(source), 'filas: PurgeQueue', /\bPurgeQueue(Command)?\b|\bpurgeQueue\s*\(/, source) : [];
+
 const RULES: Array<[string, Rule]> = [
   ['(a) limpeza de dados em test/**', cleanupRule],
   ['(a) desligar guardas em test/**', disableGuardsRule],
@@ -251,6 +296,10 @@ const RULES: Array<[string, Rule]> = [
   ['(c) src/**: $n, parseFloat, Number() em dinheiro, rotas de teste', sourceRule],
   ['(d) imports do domínio', domainImportsRule],
   ['(e) relógio e ids em domain e application', clockAndIdsRule],
+  ['(f) sem SQS falso em integração e concorrência', noSqsFakesRule],
+  ['(g) @aws-sdk só em src/messaging/infrastructure', awsSdkImportsRule],
+  ['(h) sem Math.random em domain e application', randomRule],
+  ['(i) sem PurgeQueue em test/**', purgeQueueRule],
 ];
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -436,5 +485,62 @@ describe('autoteste: (e) relógio e ids', () => {
   test('platform e infrastructure ficam fora da regra', () => {
     passes(clockAndIdsRule, 'src/platform/logging/json-logger.ts', 'const time = new Date().toISOString();');
     passes(clockAndIdsRule, 'src/shared-kernel/infrastructure/uuidv7-id-generator.ts', 'return Bun.randomUUIDv7();');
+  });
+});
+
+describe('autoteste: (f) sem SQS falso em integração e concorrência', () => {
+  const file = 'test/integration/x.test.ts';
+  test('cada padrão proibido falha', () => {
+    for (const source of [
+      "import { FakeSqs } from '../support/fake-sqs.ts';",
+      "const { FakeSqs } = await import('../support/fake-sqs');",
+      'class InMemorySqsPort {}',
+      'const sqs = new FakeSqsAdapter();',
+      "spyOn(app.sqs, 'send');",
+      "spyOn(sqsClient, 'send');",
+      "mock.module('@aws-sdk/client-sqs', () => ({}));",
+    ]) {
+      fails(noSqsFakesRule, file, source);
+    }
+  });
+  test('MiniStack real pelos helpers de suporte passa; test/unit pode usar o fake', () => {
+    passes(noSqsFakesRule, file, "import { sendRaw, receive } from '../support/sqs-client.ts';\nawait app.sqs.send(queue, options);");
+    passes(noSqsFakesRule, file, '// nunca o fake-sqs aqui\nconst ok = 1;');
+    passes(noSqsFakesRule, 'test/unit/consumer-batching.test.ts', "import { FakeSqs } from '../support/fake-sqs.ts';");
+  });
+});
+
+describe('autoteste: (g) @aws-sdk só em src/messaging/infrastructure', () => {
+  test('falha fora de messaging/infrastructure, inclusive em import dinâmico e re-export', () => {
+    fails(awsSdkImportsRule, 'src/messaging/application/x.ts', "import { SQSClient } from '@aws-sdk/client-sqs';");
+    fails(awsSdkImportsRule, 'src/outbox/application/x.ts', "const sdk = await import('@aws-sdk/client-sqs');");
+    fails(awsSdkImportsRule, 'src/platform/x.ts', "export { SQSClient } from '@aws-sdk/client-sqs';");
+  });
+  test('passa em messaging/infrastructure, em comentários e fora de src', () => {
+    passes(awsSdkImportsRule, 'src/messaging/infrastructure/aws-sqs.adapter.ts', "import { SQSClient } from '@aws-sdk/client-sqs';");
+    passes(awsSdkImportsRule, 'src/messaging/application/sqs.port.ts', '// o adapter usa @aws-sdk/client-sqs\nexport const SQS_PORT = 1;');
+    passes(awsSdkImportsRule, 'test/support/sqs-client.ts', "import { SQSClient } from '@aws-sdk/client-sqs';");
+  });
+});
+
+describe('autoteste: (h) sem Math.random em domain e application', () => {
+  test('falha em domain e application', () => {
+    fails(randomRule, 'src/wagering/domain/x.ts', 'const r = Math.random();');
+    fails(randomRule, 'src/wagering/application/x.ts', 'const jitter = 1 + Math.random() * ratio;');
+  });
+  test('passa pela porta RandomSource, em comentários e em platform', () => {
+    passes(randomRule, 'src/wagering/application/x.ts', 'const r = this.deps.random.next(); // nunca Math.random()');
+    passes(randomRule, 'src/platform/random/crypto-random-source.ts', 'return Math.random();');
+  });
+});
+
+describe('autoteste: (i) sem PurgeQueue em test/**', () => {
+  test('falha com o comando do SDK ou um helper de purge', () => {
+    fails(purgeQueueRule, 'test/support/test-queues.ts', 'await client.send(new PurgeQueueCommand({ QueueUrl: url }));');
+    fails(purgeQueueRule, 'test/integration/x.test.ts', 'await purgeQueue(queues.urls.transactions);');
+  });
+  test('passa com filas próprias apagadas no fim e em comentários', () => {
+    passes(purgeQueueRule, 'test/support/test-queues.ts', '// nenhum PurgeQueue como limpeza\nawait client.send(new DeleteQueueCommand({ QueueUrl: url }));');
+    passes(purgeQueueRule, 'src/x.ts', 'const s = "PurgeQueue";');
   });
 });

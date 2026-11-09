@@ -590,16 +590,16 @@ test/integration/sqs-outage.test.ts`
 > ("Documentação") e nas limitações do research §4 (testes contra emulador, sem validação de fidelidade à AWS real). A
 > remoção de `spike/s12/` acompanha o T121 da 001.
 
-- [ ] T084 [P] Estender `test/unit/conventions.test.ts` (T118 da 001; R-33; constitution VII): (a) em
+- [X] T084 [P] Estender `test/unit/conventions.test.ts` (T118 da 001; R-33; constitution VII): (a) em
   `test/integration/**` e `test/concurrency/**`, nenhum import de `test/support/fake-sqs.ts`, nenhuma classe
   `InMemory*Sqs*` ou `Fake*Sqs*`, nenhum `spyOn` em objeto `sqs`, e nenhum `mock.module` de `@aws-sdk`; (b) em `src/**`,
   `@aws-sdk/` só importado em `src/messaging/infrastructure/**`; (c) em `src/**/domain/**` e `src/**/application/**`,
   nenhum `Math.random(`; (d) em `test/**`, nenhum `PurgeQueue` como limpeza; cada regra com autoteste (um exemplo que passa
   e um que falha)
-- [ ] T085 Revisar o diff completo da feature contra o `review-checklist.md` (gate de Revisão), incluindo o que entrou
+- [X] T085 Revisar o diff completo da feature contra o `review-checklist.md` (gate de Revisão), incluindo o que entrou
   depois das revisões por história (US5, US6, US7 e Polish); registrar item a item; item reprovado volta para a task de
   origem antes do T086
-- [ ] T086 Executar a suíte completa pelos scripts do `package.json`, com `docker compose up -d postgres sqs`:
+- [X] T086 Executar a suíte completa pelos scripts do `package.json`, com `docker compose up -d postgres sqs`:
   `bun run typecheck && bun run test` (unit, integration e concurrency), tudo verde, inclusive o T084; registrar a
   contagem de testes e a duração
 - [ ] T087 Validar o `quickstart.md` de ponta a ponta: `docker compose --profile cluster up -d --build` e os cenários
