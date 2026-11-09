@@ -167,3 +167,31 @@ describe('pelo script real (bun scripts/migrate.ts), via Bun.spawn', () => {
     expect(result.stderr).toContain('migrations.failed');
   }, 60_000);
 });
+
+// T001 da 003 (R-38): `to` aplica só as migrations de tabelas, sem as guardas (banco do teste de divergência).
+describe('runMigrations com { to } (R-38)', () => {
+  let bareDb: string | undefined;
+
+  afterAll(async () => {
+    if (bareDb) await adminExec(`DROP DATABASE IF EXISTS ${bareDb} WITH (FORCE)`);
+  });
+
+  test("até Migration20261107000300: as quatro tabelas da 001, sem funções nem triggers de guarda", async () => {
+    bareDb = uniqueDatabaseName('migrations_to');
+    await adminExec(`CREATE DATABASE ${bareDb} TEMPLATE template0`);
+    const url = databaseUrl(bareDb);
+
+    expect(await runMigrations(url, 'up', { to: 'Migration20261107000300' })).toEqual(MIGRATIONS.slice(0, 3));
+    const c = await catalog(url);
+    expect(c.tables).toEqual(sorted(['outbox_messages', 'wager_transactions', 'wallet_ledger_entries', 'wallets']));
+    expect(c.functions).not.toContain('jg_wallet_matches_ledger_tail');
+    expect(c.functions).toEqual([]);
+    expect(c.triggers).not.toContain('ledger_before_insert_trg');
+    expect(c.triggers).toEqual([]);
+    expect(c.indexes).toEqual(sorted(['ledger_wallet_seq_idx', 'outbox_pending_idx', 'wager_tx_single_reversal_uq']));
+
+    // Sem `to`, continua aplicando tudo o que falta (comportamento de antes).
+    expect(await runMigrations(url, 'up')).toEqual(MIGRATIONS.slice(3));
+    expectFullSchema(await catalog(url));
+  });
+});

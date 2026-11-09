@@ -13,8 +13,16 @@ export interface SafetyTimer {
 export interface ShutdownSignalsOptions {
   /** `process` em produção; injetável nos testes. */
   target: SignalTarget;
-  /** `app.close()`: dispara os `onApplicationShutdown` (drain do WorkerRegistry, fechamento do ORM). */
+  /**
+   * Função de encerramento: `gracefulShutdown(app, prazo)` na 003 (drena com o HTTP aberto e depois `app.close()`,
+   * R-40); na 002 era `app.close()`.
+   */
   close: () => Promise<void>;
+  /**
+   * Chamado de forma síncrona no instante do primeiro sinal, antes do log e de `close()`: marca a instância como não
+   * pronta (ready 503) antes de qualquer drenagem (003, R-40). Opcional; erro aqui não impede o encerramento.
+   */
+  beginShutdown?: () => void;
   exit: (code: number) => void;
   /** CONSUMER_SHUTDOWN_TIMEOUT_MS; o temporizador de segurança é esse prazo + SHUTDOWN_MARGIN_MS. */
   shutdownTimeoutMs: number;
@@ -31,7 +39,7 @@ const defaultTimer = (fn: () => void, ms: number): SafetyTimer => {
  * Handler próprio de SIGTERM/SIGINT no lugar do `enableShutdownHooks()` do Nest (spike S-12.8, research R-35): o do
  * Nest reemite o sinal depois dos hooks, e como PID 1 do container o processo não sai (ou sai com 143 com init).
  *
- * - o primeiro sinal chama `close()` e, ao terminar, `exit(0)`; erro no `close()` → `exit(1)`;
+ * - o primeiro sinal chama `beginShutdown()` (síncrono), depois `close()` e, ao terminar, `exit(0)`; erro no `close()` → `exit(1)`;
  * - sinais repetidos durante o encerramento são ignorados;
  * - um temporizador de segurança (`unref`, não segura o processo) força `exit(1)` se o `close()` não terminar em
  *   `shutdownTimeoutMs` + 5 s.
@@ -46,6 +54,11 @@ export function installShutdownSignals(options: ShutdownSignalsOptions): void {
       return;
     }
     shuttingDown = true;
+    try {
+      options.beginShutdown?.();
+    } catch {
+      // marcar "não pronta" é observação para o orquestrador; o encerramento segue de qualquer forma
+    }
     options.log?.('shutdown.started', { signal });
     const timeoutMs = options.shutdownTimeoutMs + SHUTDOWN_MARGIN_MS;
     const timer = setTimer(() => {

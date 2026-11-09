@@ -1,6 +1,7 @@
 // Proxy TCP de teste entre a app e o PostgreSQL (research R-17, US9). Não é mock: o tráfego é o protocolo real do
 // PostgreSQL, repassado byte a byte. `cut()` derruba as conexões abertas e passa a recusar as novas (aceita e fecha na
-// hora); `restore()` volta a repassar. A app não sabe do proxy: só recebe uma DATABASE_URL apontando para ele.
+// hora); `stall()` deixa as conexões penduradas, sem resposta (003); `restore()` volta a repassar. A app não sabe do
+// proxy: só recebe uma DATABASE_URL apontando para ele.
 import type { Socket, TCPSocketListener } from 'bun';
 
 interface Pipe {
@@ -25,6 +26,13 @@ export interface TcpProxy {
   /** Conexões repassadas abertas agora. */
   readonly openConnections: number;
   cut(): void;
+  /**
+   * Modo "pendurado" (feature 003, R-45): as conexões novas são aceitas e nenhuma conexão (nova ou já aberta) repassa
+   * nem recebe mais nada; o cliente fica esperando uma resposta que não vem. Diferente do `cut()`, que derruba e recusa.
+   * No `restore()` e no `close()`, todas as conexões que passaram pelo modo pendurado são fechadas (bytes foram
+   * descartados, então elas não podem continuar) e o cliente reconecta.
+   */
+  stall(): void;
   restore(): void;
   close(): void;
 }
@@ -50,6 +58,7 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
   const pipes = new Set<Pipe>();
   const clients = new Map<Pipe, Socket<Peer>>();
   let isCut = false;
+  let isStalled = false;
 
   const closePipe = (pipe: Pipe) => {
     if (pipe.closed) return;
@@ -74,6 +83,7 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
         }
         pipes.add(pipe);
         clients.set(pipe, client);
+        if (isStalled) return; // pendurado: aceita e não conecta ao destino
         void Bun.connect<Peer>({
           hostname: targetHost,
           port: targetPort,
@@ -88,6 +98,7 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
               for (const chunk of pipe.early.splice(0)) writeAll(upstream, pipe.toUpstream, chunk);
             },
             data(_upstream, chunk) {
+              if (isStalled) return; // pendurado: a resposta nunca chega ao cliente
               const socket = clients.get(pipe);
               if (socket) writeAll(socket, pipe.toClient, new Uint8Array(chunk));
             },
@@ -108,6 +119,7 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
       },
       data(client, chunk) {
         const { pipe } = client.data;
+        if (isStalled) return; // pendurado: nada segue para o destino
         const bytes = new Uint8Array(chunk);
         if (pipe.upstream) writeAll(pipe.upstream, pipe.toUpstream, bytes);
         else pipe.early.push(bytes);
@@ -138,11 +150,19 @@ export async function startTcpProxy(targetUrl: string): Promise<TcpProxy> {
       isCut = true;
       for (const pipe of [...pipes]) closePipe(pipe);
     },
+    stall() {
+      isStalled = true;
+    },
     restore() {
       isCut = false;
+      if (isStalled) {
+        isStalled = false;
+        for (const pipe of [...pipes]) closePipe(pipe);
+      }
     },
     close() {
       isCut = true;
+      isStalled = false;
       for (const pipe of [...pipes]) closePipe(pipe);
       listener.stop(true);
     },

@@ -42,7 +42,14 @@ export class AppModule {
       { provide: CLOCK, useClass: SystemClock },
       { provide: ID_GENERATOR, useClass: UuidV7IdGenerator },
       // Porta de métricas em memória, uma por instância (FR-036, R-32); jitter pela porta RandomSource (R-25).
-      { provide: METRICS, useValue: new InMemoryMetrics() },
+      // Fora de NODE_ENV=test, amostra fora do contrato é descartada com aviso, nunca lança (003, R-43).
+      {
+        provide: METRICS,
+        useValue: new InMemoryMetrics({
+          nodeEnv: config.nodeEnv,
+          warn: (message, fields) => options.logger.warn(message, fields),
+        }),
+      },
       { provide: RANDOM_SOURCE, useValue: options.random ?? new CryptoRandomSource() },
       {
         provide: FAILPOINTS,

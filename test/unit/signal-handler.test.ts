@@ -99,3 +99,41 @@ describe('installShutdownSignals', () => {
     expect(h.timers).toEqual([]);
   });
 });
+
+// T006 da 003 (R-40; requisito do usuário): o handler usa a função de encerramento recebida e, antes dela, marca a
+// instância como "não pronta" de forma síncrona, no instante do sinal.
+describe('installShutdownSignals com beginShutdown', () => {
+  test('beginShutdown é chamado de forma síncrona no sinal, antes de close(); o sinal repetido não chama de novo', async () => {
+    const order: string[] = [];
+    const listeners = new Map<string, () => void>();
+    let release: () => void = () => {};
+    installShutdownSignals({
+      target: { on: (signal: string, listener: () => void) => void listeners.set(signal, listener) },
+      beginShutdown: () => void order.push('beginShutdown'),
+      close: () => {
+        order.push('close');
+        return new Promise<void>((resolve) => (release = resolve));
+      },
+      exit: (code) => void order.push(`exit(${code})`),
+      shutdownTimeoutMs: 1_000,
+      setTimer: () => ({ unref: () => {}, clear: () => {} }),
+      log: (message) => void order.push(message),
+    });
+    listeners.get('SIGTERM')!();
+    // Síncrono: já marcado antes de qualquer await, e antes do log e da drenagem.
+    expect(order).toEqual(['beginShutdown', 'shutdown.started', 'close']);
+    listeners.get('SIGTERM')!();
+    expect(order.filter((e) => e === 'beginShutdown')).toHaveLength(1);
+    release();
+    await flush();
+    expect(order).toEqual(['beginShutdown', 'shutdown.started', 'close', 'shutdown.signal_ignored', 'shutdown.completed', 'exit(0)']);
+  });
+
+  test('sem beginShutdown, o comportamento da 002 não muda', async () => {
+    const h = harness();
+    h.send('SIGTERM');
+    await flush();
+    expect(h.closes).toBe(1);
+    expect(h.exits).toEqual([0]);
+  });
+});

@@ -3,6 +3,7 @@
 import type { INestApplication } from '@nestjs/common';
 import type { MikroORM } from '@mikro-orm/postgresql';
 import { bootstrap } from '../../src/main.ts';
+import { gracefulShutdown } from '../../src/platform/lifecycle/graceful-shutdown.ts';
 import { loadConfig } from '../../src/platform/config/app-config.ts';
 import { ORM } from '../../src/platform/persistence/orm.provider.ts';
 import { METRICS } from '../../src/platform/metrics/metrics.port.ts';
@@ -24,6 +25,11 @@ export interface RunningApp {
   /** Linhas JSON de log emitidas pela app. */
   logs: string[];
   close(): Promise<void>;
+  /**
+   * O mesmo encerramento do handler de sinal (003, R-40): ready 503 na hora, drenagem com o HTTP aberto e depois
+   * `app.close()`. Depois dele, `close()` só espera o mesmo encerramento.
+   */
+  shutdown(): Promise<void>;
 }
 
 export async function startApp(options: {
@@ -50,7 +56,7 @@ export async function startApp(options: {
     logWriter: (line) => logs.push(line),
     ...(options.random ? { random: options.random } : {}),
   });
-  let closed = false;
+  let closing: Promise<void> | undefined;
   return {
     baseUrl: `http://127.0.0.1:${started.port}`,
     app: started.app,
@@ -58,10 +64,13 @@ export async function startApp(options: {
     metrics: started.app.get<InMemoryMetrics>(METRICS),
     sqs: started.app.get<SqsPort>(SQS_PORT),
     logs,
-    async close() {
-      if (closed) return;
-      closed = true;
-      await started.app.close();
+    close() {
+      closing ??= started.app.close();
+      return closing;
+    },
+    shutdown() {
+      closing ??= gracefulShutdown(started.app, config.consumer.shutdownTimeoutMs);
+      return closing;
     },
   };
 }

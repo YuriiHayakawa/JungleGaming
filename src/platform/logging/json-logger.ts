@@ -92,18 +92,28 @@ interface LoggedResponse {
   on(event: 'finish', listener: () => void): unknown;
 }
 
-/** Middleware express: uma linha por requisição com método, rota, status e duração, sem valores monetários. */
+/** Rotas operacionais consultadas a cada poucos segundos: logadas em debug (003, R-41; FR-018). */
+export function isOperationalRoute(path: string): boolean {
+  return path === '/metrics' || path.startsWith('/health/');
+}
+
+/**
+ * Middleware express: uma linha por requisição com método, rota, status e duração, sem valores monetários. `/health/*`
+ * e `/metrics` em nível debug; as demais em info.
+ */
 export function requestLoggingMiddleware(logger: JsonLogger) {
   return (req: LoggedRequest, res: LoggedResponse, next: () => void): void => {
     const started = performance.now();
     res.on('finish', () => {
       const path = (req.originalUrl ?? req.url).split('?')[0];
-      logger.info('http.request', {
+      const fields = {
         method: req.method,
         route: path,
         status: res.statusCode,
         durationMs: Math.round(performance.now() - started),
-      });
+      };
+      if (isOperationalRoute(path ?? '')) logger.debug('http.request', fields);
+      else logger.info('http.request', fields);
     });
     next();
   };

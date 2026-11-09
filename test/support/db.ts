@@ -6,6 +6,13 @@ export const ADMIN_URL =
 
 export const TEMPLATE_DATABASE = 'jg_test_template';
 
+/**
+ * Template "sem guardas" da 003 (R-38): só as migrations de tabelas (wallets, transações, ledger, outbox), sem a
+ * Migration20261107000400 (funções e triggers de guarda) e sem as da 002. Só os testes que provocam divergência o usam.
+ */
+export const BARE_TEMPLATE_DATABASE = 'jg_test_template_bare';
+export const BARE_TEMPLATE_LAST_MIGRATION = 'Migration20261107000300';
+
 /** URL do banco `name` no mesmo servidor do ADMIN_URL. */
 export function databaseUrl(name: string): string {
   const url = new URL(ADMIN_URL);

@@ -34,18 +34,18 @@ limpeza; `assertWalletMatchesLedger` ao fim de todo teste que toca wallet; tempo
 
 **Purpose**: suporte de teste e de migração usado pelas três histórias. Nenhuma dependência nova.
 
-- [ ] T001 [P] Acrescentar o parâmetro opcional `to` em `src/platform/persistence/run-migrations.ts`
+- [X] T001 [P] Acrescentar o parâmetro opcional `to` em `src/platform/persistence/run-migrations.ts`
   (`runMigrations(url, 'up', { to: 'Migration20261107000300' })` → `orm.migrator.up({ to })`), sem mudar o
   comportamento sem `to` (R-38); teste em `test/integration/migrations.test.ts`: num banco vazio, com
   `to: 'Migration20261107000300'`, existem `wallets`, `wager_transactions`, `wallet_ledger_entries` e `outbox_messages`
   e **não** existem a função `jg_wallet_matches_ledger_tail` nem o trigger `ledger_before_insert_trg`
-- [ ] T002 [P] Criar `useBareTestDatabase(tag)` em `test/support/test-database.ts` (R-38): `beforeAll` cria um banco
+- [X] T002 [P] Criar `useBareTestDatabase(tag)` em `test/support/test-database.ts` (R-38): `beforeAll` cria um banco
   vazio `jg_test_<tag>_<aleatório>` **sem** o template e aplica `runMigrations(url, 'up', { to:
   'Migration20261107000300' })`; `afterAll` apaga o banco; mesmo formato de retorno de `useTestDatabase` (`url`, `db`)
-- [ ] T003 [P] Acrescentar `stall()` em `test/support/tcp-proxy.ts` (R-45): aceita conexões novas e não repassa nem
+- [X] T003 [P] Acrescentar `stall()` em `test/support/tcp-proxy.ts` (R-45): aceita conexões novas e não repassa nem
   responde nada até `restore()` (diferente de `cut()`, que recusa); as conexões penduradas são fechadas no `restore()` e
   no `close()`
-- [ ] T004 [P] Criar `test/support/prometheus.ts` (R-45): `parsePrometheus(text)` mínimo, só para asserções — devolve
+- [X] T004 [P] Criar `test/support/prometheus.ts` (R-45): `parsePrometheus(text)` mínimo, só para asserções — devolve
   famílias (`# TYPE`) e amostras `{ name, labels, value }`, recusando linhas fora do formato 0.0.4; e
   `sampleValue(parsed, name, labels?)`
 
@@ -58,32 +58,32 @@ rótulos, encerramento que drena antes de fechar o HTTP, `@Public()` e log em de
 
 ### Testes da fundação (escrever primeiro; devem falhar)
 
-- [ ] T005 [P] Estender `test/unit/in-memory-metrics.test.ts` (R-43; FR-020, FR-023, FR-024): histograma de
+- [X] T005 [P] Estender `test/unit/in-memory-metrics.test.ts` (R-43; FR-020, FR-023, FR-024): histograma de
   `processing_latency_ms` com buckets fixos em ms "5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000,
   +Inf" (contagem por bucket, `sum`, `count`); `observations()` devolve no máximo as últimas 1 000 observações da série;
   rótulo fora de "status, source, worker, errorCode, errorClass, outcome, kind" é recusado com erro; o contador
   `reconciliation_divergences_total` existe; `snapshot()` traz os histogramas
-- [ ] T006 [P] Escrever `test/unit/graceful-shutdown.test.ts` (R-40; FR-016): `gracefulShutdown(app)` chama
+- [X] T006 [P] Escrever `test/unit/graceful-shutdown.test.ts` (R-40; FR-016): `gracefulShutdown(app)` chama
   `WorkerRegistry.drainAll(prazo)` e só depois `app.close()`; `isDraining()` é true desde a primeira chamada de
   `drainAll` e continua true; uma segunda chamada de `drainAll` devolve a mesma promessa; erro no `close()` propaga;
   e, em `test/unit/signal-handler.test.ts`, o handler de sinal usa a função de encerramento recebida (sinal repetido
   ignorado e temporizador de segurança inalterados)
-- [ ] T007 [P] Escrever `test/unit/public-route.test.ts` (R-41): o decorator `@Public()` grava o metadado lido pelo guard
+- [X] T007 [P] Escrever `test/unit/public-route.test.ts` (R-41): o decorator `@Public()` grava o metadado lido pelo guard
   global; o guard libera rota com `@Public()`; e o middleware de log de requisição registra `/health/live`,
   `/health/ready` e `/metrics` em nível `debug` e as demais rotas em `info` (com `JsonLogger` capturando as linhas)
 
 ### Implementação da fundação
 
-- [ ] T008 Estender `src/platform/metrics/metrics.port.ts` e `src/platform/metrics/in-memory-metrics.ts` (R-43):
+- [X] T008 Estender `src/platform/metrics/metrics.port.ts` e `src/platform/metrics/in-memory-metrics.ts` (R-43):
   `reconciliation_divergences_total` em `COUNTER_NAMES`; lista fechada de rótulos; histogramas por bucket com `sum` e
   `count`; janela das últimas 1 000 observações por série (mantém a API `observations()` dos testes da 002);
   `snapshot()` com `histograms`. Faz o T005 passar; toda a suíte da 002 continua verde
-- [ ] T009 Implementar o encerramento que drena antes de fechar o HTTP (R-40; FR-016): `isDraining()` em
+- [X] T009 Implementar o encerramento que drena antes de fechar o HTTP (R-40; FR-016): `isDraining()` em
   `src/platform/workers/worker-registry.ts`; `src/platform/lifecycle/graceful-shutdown.ts` com
   `gracefulShutdown(app, timeoutMs)` (`drainAll` → `app.close()`); `src/main.ts` passa `gracefulShutdown` ao
   `installShutdownSignals`; `test/support/app-harness.ts` ganha `shutdown()` com a mesma função. Faz o T006 passar;
   `test/concurrency/signal-exit.test.ts` e `test/concurrency/graceful-sigterm.test.ts` continuam verdes
-- [ ] T010 [P] Criar `src/platform/auth/public.decorator.ts` (`@Public()`) e fazer `src/platform/auth/noop-auth.guard.ts`
+- [X] T010 [P] Criar `src/platform/auth/public.decorator.ts` (`@Public()`) e fazer `src/platform/auth/noop-auth.guard.ts`
   ler o metadado pelo `Reflector`; mudar `requestLoggingMiddleware` em `src/platform/logging/json-logger.ts` para nível
   `debug` em `/health/*` e `/metrics` (R-41). Faz o T007 passar
 
