@@ -658,9 +658,22 @@ determinísticos, não um harness de caos aleatório**: não há injeção aleat
 falhas em instantes arbitrários. O SIGKILL do `sigkill-recovery` acontece em momento aleatório, mas dentro de um roteiro
 fixo.
 
+**Teste de carga** (`bun run test:load`, fora de `bun run test`): `load/load-test.ts` roda contra o cluster de 3
+instâncias três cenários de 30 s com 32 requisições em voo (wallets distribuídas, wallet quente e 20% de duplicatas).
+Ele mede throughput, p50/p95/p99, status HTTP, replays, lock esgotado e os gauges da outbox, e no fim reconcilia todas
+as wallets tocadas. Os números, a metodologia e a análise estão em [docs/load-test.md](docs/load-test.md). Resumo de 3
+execuções nesta máquina:
+
+- cerca de 390–445 req/s com p99 de cerca de 172 ms nas wallets distribuídas;
+- 73–152 req/s com p99 acima de 1 s na wallet quente;
+- nenhum erro, 100% das duplicatas reconhecidas, nenhum `55P03`;
+- todas as wallets consistentes e o saldo esperado pelo cliente igual ao armazenado;
+- o gargalo é a publicação da outbox (§20).
+
 **O que NÃO foi testado**:
 
-- teste de carga (throughput, latências p50/p95/p99, outbox lag sob carga): não existe `test:load`;
+- carga em ambiente separado do cliente, modelo de chegada aberta e ponto de saturação: o teste de carga roda numa
+  máquina só, em laço fechado e com concorrência fixa (ver docs/load-test.md §4.5);
 - AWS SQS real: tudo roda contra o MiniStack (§20);
 - SIGTERM fora de container no Windows: o Windows mata o processo à força, e a prova é feita em container Linux;
 - falhas de disco, failover ou réplica do PostgreSQL, relógio dessincronizado entre instâncias;
@@ -740,7 +753,18 @@ Outras decisões com impacto na avaliação:
   outras wallets da mesma instância podem esperar por conexão, limitadas por `DB_POOL_ACQUIRE_TIMEOUT_MS`.
 - **`stop_grace_period`** de 30 s: com o prazo máximo aceito (25 s) mais a margem (5 s), empata com o Docker. O padrão
   (10 s) deixa 15 s de folga.
-- **Sem teste de carga e sem UI**; também não há balanceador no Compose (os clientes escolhem a instância).
+- **Vazão de publicação da outbox abaixo da vazão de escrita** (medida no teste de carga, docs/load-test.md §4.4):
+  - os 2 publicadores do cluster publicaram 96–168 eventos/s contra cerca de 740 eventos/s gerados;
+  - sob carga sustentada, o backlog chegou a 19–24 mil eventos, com o mais antigo esperando até cerca de 4 min;
+  - nada se perde, mas o atraso cresce enquanto a carga durar;
+  - causas: o MiniStack (um núcleo saturado) e o envio evento a evento (`SendMessage`), pois o `SendMessageBatch` foi
+    adiado (R-34);
+  - mitigações possíveis: `SendMessageBatch`, envios em paralelo dentro do lote ou mais publicadores.
+- **Wallet quente**: o lock por wallet serializa as operações. No teste de carga, uma única wallet sustentou 73–152
+  req/s, sem erro e sem lock esgotado, mas com cauda longa: p50 de cerca de 23 ms e p95 perto de 1 s. A hipótese,
+  não verificada, é que a fila do lock não é atendida em ordem de chegada.
+- **O teste de carga não é capacidade de produção**: cliente, instâncias, banco e emulador dividem uma máquina de
+  desktop (docs/load-test.md §4.5). Não há UI nem balanceador no Compose (os clientes escolhem a instância).
 - **Moeda única nos fluxos**: o modelo é multi-moeda e o conflito é testado, mas os fluxos usam BRL.
 
 ## 21. Decisões de interpretação mais relevantes

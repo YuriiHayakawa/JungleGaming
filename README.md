@@ -182,6 +182,7 @@ No Compose, o serviço `migrate` roda `migrate:up` antes das apps. O ciclo `up �
 | `bun run test:concurrency` | `test/concurrency`: 3 processos reais da app, SIGKILL, e SIGTERM em container Linux | `postgres`, `sqs` e Docker |
 | `bun run test` | `test:unit`, `test:integration` e `test:concurrency`, em sequência | idem |
 | `bun run test:chaos` | conjunto focado de testes de falha (ver abaixo) | idem |
+| `bun run test:load` | teste de carga contra o cluster: 3 cenários (wallets distribuídas, wallet quente, duplicatas) com throughput, p50/p95/p99, status HTTP, lock, outbox e verificação final das invariantes; JSON em `load/results/` | cluster no ar (`docker compose --profile cluster up -d --build`) |
 
 Na máquina de referência a suíte completa leva cerca de 4 minutos.
 
@@ -195,7 +196,10 @@ focado e determinístico de cenários de queda, **não** um harness de caos alea
 | `test/concurrency/concurrent-publishers.test.ts` | 3 publicadores na mesma outbox, um deles morto entre o envio e a marca |
 | `test/concurrency/graceful-sigterm.test.ts` | SIGTERM real em container Linux, com mensagem em andamento e o ready lido durante a drenagem |
 
-Não há `test:load`: o teste de carga, diferencial opcional, não foi feito.
+**`test:load`** é o teste de carga (diferencial opcional do enunciado). Ele não faz parte de `bun run test`. A
+metodologia, o ambiente, os resultados e a análise estão em [docs/load-test.md](docs/load-test.md). Os parâmetros vêm
+por env, por exemplo `LOAD_CONCURRENCY=64 LOAD_DURATION_S=60 bun run test:load`. O script sai com código 1 se a
+verificação final das invariantes falhar.
 
 ## 7. Exemplos de uso (curl)
 
@@ -352,12 +356,13 @@ src/
   (cada módulo: domain/ → application/ → infrastructure/ e interfaces/)
 migrations/                   6 migrations em SQL cru, com up e down
 scripts/                      migrate.ts e queue-init.ts
+load/                         load-test.ts (bun run test:load) e results/ (só o exemplo curado é versionado)
 test/
   unit/                       domínio e guardrails de código (conventions.test.ts)
   integration/                app em processo, PostgreSQL e MiniStack reais, proxies TCP para falhas
   concurrency/                3 processos reais, SIGKILL, SIGTERM em container
   support/                    harnesses, banco por arquivo, filas por arquivo, proxy TCP, assertWalletMatchesLedger
-docs/                         enunciado e interpretações (I-01 a I-76)
+docs/                         enunciado, interpretações (I-01 a I-76) e relatório do teste de carga
 specs/                        spec, plan, research, data-model, contracts, tasks e notas das features 001 a 003
 ```
 

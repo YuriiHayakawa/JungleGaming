@@ -1,0 +1,168 @@
+{
+  "run": "20261109214320-e75b5c",
+  "startedAt": "2026-11-09T21:43:20.090Z",
+  "finishedAt": "2026-11-09T21:52:05.794Z",
+  "client": {
+    "bun": "1.4.4",
+    "platform": "win32",
+    "arch": "x64"
+  },
+  "config": {
+    "urls": [
+      "http://localhost:3001",
+      "http://localhost:3002",
+      "http://localhost:3003"
+    ],
+    "wallets": 200,
+    "concurrency": 32,
+    "durationS": 30,
+    "warmupS": 5,
+    "duplicateRatio": 0.2,
+    "scenarios": [
+      "A",
+      "B",
+      "C"
+    ],
+    "initialBalance": "100000000.00",
+    "amount": "1.00",
+    "eventSink": true,
+    "drainTimeoutS": 1200
+  },
+  "eventsConsumedBySink": 59904,
+  "results": [
+    {
+      "id": "A",
+      "name": "wallets distribuídas",
+      "durationS": 30.1,
+      "requests": 12021,
+      "throughputRps": 400,
+      "latencyMs": {
+        "p50": 75.7,
+        "p95": 132.3,
+        "p99": 172,
+        "max": 301.4,
+        "mean": 79.9
+      },
+      "statuses": {
+        "201": {
+          "count": 12021,
+          "pct": 100
+        }
+      },
+      "outcomes": {
+        "201 PROCESSED": 12021
+      },
+      "resends": {
+        "sent": 0,
+        "recognizedAsReplay": 0,
+        "replaysTotal": 0
+      },
+      "server": {
+        "lockConflicts": 0,
+        "duplicatesIdempotency": 0,
+        "transactionsByStatus": {
+          "PROCESSED": 12021
+        },
+        "outboxPendingPeak": 18926,
+        "outboxOldestAgePeakS": 118.238,
+        "outboxPendingAtEnd": 18963,
+        "outboxDrainS": 118.4,
+        "outboxDrainRatePerS": 160.2
+      }
+    },
+    {
+      "id": "B",
+      "name": "wallet quente",
+      "durationS": 30.2,
+      "requests": 4594,
+      "throughputRps": 152,
+      "latencyMs": {
+        "p50": 23,
+        "p95": 925.2,
+        "p99": 1051.5,
+        "max": 1260.5,
+        "mean": 209.8
+      },
+      "statuses": {
+        "201": {
+          "count": 4594,
+          "pct": 100
+        }
+      },
+      "outcomes": {
+        "201 PROCESSED": 4594
+      },
+      "resends": {
+        "sent": 0,
+        "recognizedAsReplay": 0,
+        "replaysTotal": 0
+      },
+      "server": {
+        "lockConflicts": 0,
+        "duplicatesIdempotency": 0,
+        "transactionsByStatus": {
+          "PROCESSED": 4594
+        },
+        "outboxPendingPeak": 5521,
+        "outboxOldestAgePeakS": 55.284,
+        "outboxPendingAtEnd": 5533,
+        "outboxDrainS": 55.3,
+        "outboxDrainRatePerS": 100.1
+      }
+    },
+    {
+      "id": "C",
+      "name": "duplicatas (20% reenviadas)",
+      "durationS": 30.1,
+      "requests": 17631,
+      "throughputRps": 586.7,
+      "latencyMs": {
+        "p50": 48.2,
+        "p95": 125.9,
+        "p99": 159.1,
+        "max": 311.1,
+        "mean": 54.5
+      },
+      "statuses": {
+        "200": {
+          "count": 3539,
+          "pct": 20.07
+        },
+        "201": {
+          "count": 14092,
+          "pct": 79.93
+        }
+      },
+      "outcomes": {
+        "201 PROCESSED": 14092,
+        "200 PROCESSED": 3539
+      },
+      "resends": {
+        "sent": 3539,
+        "recognizedAsReplay": 3539,
+        "replaysTotal": 3539
+      },
+      "server": {
+        "lockConflicts": 0,
+        "duplicatesIdempotency": 3539,
+        "transactionsByStatus": {
+          "PROCESSED": 14092
+        },
+        "outboxPendingPeak": 24139,
+        "outboxOldestAgePeakS": 244.468,
+        "outboxPendingAtEnd": 24157,
+        "outboxDrainS": 244.7,
+        "outboxDrainRatePerS": 98.7
+      }
+    }
+  ],
+  "verification": {
+    "walletsChecked": 201,
+    "consistent": 201,
+    "inconsistent": [],
+    "negativeBalances": [],
+    "expectedBalanceChecked": 201,
+    "expectedBalanceMismatches": [],
+    "skippedUncertain": 0
+  }
+}

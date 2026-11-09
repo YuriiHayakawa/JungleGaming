@@ -6,3 +6,7 @@ node_modules/
 coverage/
 *.log
 dist/
+
+# resultados do teste de carga (só o exemplo curado é versionado)
+load/results/*
+!load/results/example.json
