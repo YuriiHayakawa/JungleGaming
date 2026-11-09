@@ -54,12 +54,18 @@ test('fila fora: 10 BETs por HTTP respondem 201 e a outbox acumula; fila de volt
   ).map((r) => r.id);
   expect(eventIds).toHaveLength(20);
 
-  // Com a fila fora, os envios falham e os eventos ficam pendentes, com tentativas contadas.
+  // Com a fila fora, os envios falham e os eventos ficam pendentes. Cada rodada para na primeira falha (N-22): o
+  // evento que falhou conta tentativa e os não tentados voltam sem contar e sem esperar o lease de 30 s.
   await waitFor(async () => {
     const rows = await database.db.query<{ attempts: number }>('SELECT attempts FROM outbox_messages WHERE id = ANY(?)', [eventIds]);
-    return rows.every((r) => r.attempts >= 1);
+    return rows.filter((r) => r.attempts >= 1).length >= 2;
   }, 15_000);
   expect(await pendingCount()).toBeGreaterThanOrEqual(20);
+  const leased = await database.db.query(
+    "SELECT 1 FROM outbox_messages WHERE id = ANY(?) AND attempts = 0 AND next_attempt_at > now() + interval '5 seconds'",
+    [eventIds],
+  );
+  expect(leased).toHaveLength(0);
   // A app continua viva e atendendo.
   const health = await submitWager(fetcherFor(app.baseUrl), wagerRequest('LOSS', { walletId: wallet.id, playerId: wallet.playerId, money: { amount: '0.00', currency: 'BRL' } }));
   expect(health.status).toBe(201);

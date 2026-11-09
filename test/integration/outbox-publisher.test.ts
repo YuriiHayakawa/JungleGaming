@@ -74,41 +74,46 @@ describe('publicação', () => {
 });
 
 describe('falha de envio', () => {
-  test('com a fila de eventos inacessível: published_at continua nulo, attempts vira 1 e a próxima tentativa avança 1 s, depois 2 s', async () => {
+  // Com a fila fora, cada rodada para na primeira falha de envio (N-22): o evento que falhou conta tentativa com o
+  // backoff do I-65 (1 s, depois 2 s) e os não tentados voltam sem contar. Cada evento é acompanhado individualmente.
+  test('com a fila de eventos inacessível: published_at continua nulo, e cada evento que falha avança 1 s, depois 2 s', async () => {
     const proxy = await startTcpProxy(SQS_ENDPOINT);
     proxies.push(proxy);
     const endpoint = proxy.url.replace(/\/$/, '');
-    proxy.cut();
     const app = await start({ publisher: true, endpoint });
     const wallet = await openWallet(fetcherFor(app.baseUrl), '100.00');
+    // O evento de abertura sai com a fila no ar; só os eventos da BET ficam sob a fila cortada.
+    await waitFor(async () => (await database.db.query('SELECT 1 FROM outbox_messages WHERE published_at IS NULL')).length === 0, 10_000);
+    proxy.cut();
     const response = await submitWager(fetcherFor(app.baseUrl), wagerRequest('BET', { walletId: wallet.id, playerId: wallet.playerId }));
     expect(response.status).toBe(201); // o HTTP não depende da fila (FR-033)
 
-    const one = async (attempts: number) => {
-      await waitFor(async () => (await outboxOf(response.body.transactionId)).every((r) => r.attempts >= attempts), 15_000, 20);
+    // Primeira observação de cada (evento, attempts): quanto falta para a próxima tentativa naquele instante.
+    const ahead = new Map<string, number>();
+    await waitFor(async () => {
       const observedAt = Date.now();
-      return { rows: await outboxOf(response.body.transactionId), observedAt };
-    };
-    const first = await one(1);
-    for (const row of first.rows) {
-      expect(row.published_at).toBeNull();
-      expect(row.attempts).toBe(1);
-      const ahead = row.next_attempt_at.getTime() - first.observedAt;
-      expect(ahead).toBeGreaterThan(0);
-      expect(ahead).toBeLessThanOrEqual(1_000);
-    }
-    const second = await one(2);
-    for (const row of second.rows) {
-      const before = first.rows.find((r) => r.id === row.id)!;
-      expect(row.published_at).toBeNull();
-      expect(row.attempts).toBe(2);
-      const step = row.next_attempt_at.getTime() - before.next_attempt_at.getTime();
-      expect(step).toBeGreaterThanOrEqual(2_000);
-      expect(step).toBeLessThan(4_500);
+      const rows = await outboxOf(response.body.transactionId);
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        expect(row.published_at).toBeNull();
+        const key = `${row.id}:${row.attempts}`;
+        if (row.attempts > 0 && !ahead.has(key)) ahead.set(key, row.next_attempt_at.getTime() - observedAt);
+      }
+      return rows.every((r) => r.attempts >= 2);
+    }, 30_000, 20);
+
+    const ids = (await outboxOf(response.body.transactionId)).map((r) => r.id);
+    for (const id of ids) {
+      const first = ahead.get(`${id}:1`)!;
+      const second = ahead.get(`${id}:2`)!;
+      expect(first).toBeGreaterThan(0);
+      expect(first).toBeLessThanOrEqual(1_000);
+      expect(second).toBeGreaterThan(1_000);
+      expect(second).toBeLessThanOrEqual(2_000);
     }
     await app.close();
     await assertWalletMatchesLedger(database.db, wallet.id);
-  }, 40_000);
+  }, 45_000);
 });
 
 describe('claim com lease (data-model §3.2)', () => {

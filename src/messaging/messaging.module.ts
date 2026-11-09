@@ -11,7 +11,7 @@ import { WageringModule } from '../wagering/wagering.module.ts';
 import { ConsumeWagerMessageUseCase } from './application/consume-wager-message.use-case.ts';
 import { SQS_PORT, type SqsPort } from './application/sqs.port.ts';
 import { AwsSqsAdapter } from './infrastructure/aws-sqs.adapter.ts';
-import { createSqsClient } from './infrastructure/sqs-client.factory.ts';
+import { createSqsClient, SQS_POLL_TIMEOUT_MS } from './infrastructure/sqs-client.factory.ts';
 import { CONSUME_WAGER_MESSAGE_USE_CASE, WagerTransactionsConsumer } from './interfaces/wager-transactions.consumer.ts';
 
 /**
@@ -25,7 +25,8 @@ import { CONSUME_WAGER_MESSAGE_USE_CASE, WagerTransactionsConsumer } from './int
     {
       provide: SQS_PORT,
       inject: [APP_CONFIG],
-      useFactory: (config: AppConfig) => new AwsSqsAdapter(createSqsClient(config.sqs)),
+      useFactory: (config: AppConfig) =>
+        new AwsSqsAdapter(createSqsClient(config.sqs), createSqsClient(config.sqs, SQS_POLL_TIMEOUT_MS)),
     },
     {
       provide: CONSUME_WAGER_MESSAGE_USE_CASE,

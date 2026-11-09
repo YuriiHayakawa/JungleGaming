@@ -144,6 +144,34 @@ describe('envelope único e taxonomia (cenários 1 e 3)', () => {
   });
 });
 
+describe('balance obrigatório em todo corpo de resultado (ajuste N-13)', () => {
+  // TransactionResult.balance só pode faltar numa FAILED, que nunca é corpo de resultado (vira o envelope 500, I-62).
+  // Este teste falha se algum 201, 200, 202 ou 422, novo ou em replay, sair sem o saldo observado.
+  const expectBalance = (response: { status: number; body: TransactionResultBody }, status: number, amount: string) => {
+    expect(response.status, JSON.stringify(response.body)).toBe(status);
+    expect(response.body.balance, `${status} sem balance: ${JSON.stringify(response.body)}`).toEqual({ amount, currency: 'BRL' });
+  };
+
+  test('201, 200, 202 e 422 (novos e replays) trazem balance como string decimal', async () => {
+    const wallet = await openWallet(http, '10.00');
+    const base = { walletId: wallet.id, playerId: wallet.playerId };
+    const bet = wagerRequest('BET', { ...base, money: { amount: '1.00', currency: 'BRL' } });
+    const rejected = wagerRequest('BET', { ...base, money: { amount: '999.00', currency: 'BRL' } });
+    const pending = wagerRequest('REFUND', { ...base, money: { amount: '1.00', currency: 'BRL' }, referenceExternalTransactionId: `missing-${crypto.randomUUID()}` });
+    const loss = wagerRequest('LOSS', { ...base, money: { amount: '0.00', currency: 'BRL' } });
+
+    expectBalance(await submitWager<TransactionResultBody>(http, bet), 201, '9.00');
+    expectBalance(await submitWager<TransactionResultBody>(http, bet), 200, '9.00');
+    expectBalance(await submitWager<TransactionResultBody>(http, rejected), 422, '9.00');
+    expectBalance(await submitWager<TransactionResultBody>(http, rejected), 422, '9.00');
+    expectBalance(await submitWager<TransactionResultBody>(http, pending), 202, '9.00');
+    expectBalance(await submitWager<TransactionResultBody>(http, pending), 202, '9.00');
+    expectBalance(await submitWager<TransactionResultBody>(http, loss), 201, '9.00'); // PROCESSED sem lançamento
+    expectBalance(await submitWager<TransactionResultBody>(http, loss), 200, '9.00');
+    await assertWalletMatchesLedger(database.db, wallet.id);
+  });
+});
+
 describe('edge cases da spec', () => {
   test('Idempotency-Key ausente ou vazio → IDEMPOTENCY_KEY_REQUIRED; mais de 255 → VALIDATION_ERROR', async () => {
     const wallet = await openWallet(http, '10.00');

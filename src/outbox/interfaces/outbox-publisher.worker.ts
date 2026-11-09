@@ -7,10 +7,18 @@ import type { PublishOutboxUseCase } from '../application/publish-outbox.use-cas
 
 export const PUBLISH_OUTBOX_USE_CASE = Symbol('PUBLISH_OUTBOX_USE_CASE');
 
+/** Rodada interrompida por falha de envio: o laço aplica o backoff de 1 a 30 s antes da próxima (FR-033, N-22). */
+export class PublishRoundFailedError extends Error {
+  override readonly name = 'PublishRoundFailedError';
+  constructor(released: number) {
+    super(`send failed; ${released} untried event(s) released`);
+  }
+}
+
 /**
  * Publicador da outbox (plan, "Publicador"), ligado por PUBLISHER_ENABLED (R-27): PollingLoop com PUBLISHER_POLL_MS.
- * Enquanto o lote vem cheio, reserva o próximo sem esperar. Falha no claim (PostgreSQL fora) → backoff do laço
- * (FR-033); para de reservar no shutdown pelo WorkerRegistry (R-28, FR-015).
+ * Enquanto o lote vem cheio, reserva o próximo sem esperar. Falha no claim (PostgreSQL fora) ou falha de envio na
+ * rodada (SQS fora, N-22) → backoff do laço (FR-033); para de reservar no shutdown pelo WorkerRegistry (R-28, FR-015).
  */
 @Injectable()
 export class OutboxPublisherWorker implements OnApplicationBootstrap, OnApplicationShutdown {
@@ -32,6 +40,7 @@ export class OutboxPublisherWorker implements OnApplicationBootstrap, OnApplicat
       iteration: async (signal) => {
         for (;;) {
           const round = await this.useCase.publishOnce();
+          if (round.failed > 0) throw new PublishRoundFailedError(round.released);
           if (round.claimed < publisher.batchSize || signal.aborted) return;
         }
       },

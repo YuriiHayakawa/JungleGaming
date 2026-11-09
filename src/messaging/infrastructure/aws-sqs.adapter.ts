@@ -16,14 +16,24 @@ import type { QueueCounts, ReceiveOptions, SendOptions, SqsMessage, SqsPort } fr
  * A URL de cada fila é resolvida pelo nome uma vez e guardada. A resolução é feita no primeiro uso, não no boot da
  * app: uma instância só HTTP (papéis desligados) sobe e atende sem o SQS no ar (FR-033); uma falha na resolução não é
  * guardada e é repetida na próxima chamada (implementation-notes.md, T027).
+ *
+ * Dois clientes (N-22): `pollClient` só para o ReceiveMessage (long polling, prazo de 30 s) e `client` para as
+ * chamadas curtas (prazo de 5 s por tentativa, 1 nova tentativa). Sem `pollClient`, o `client` atende tudo.
  */
 export class AwsSqsAdapter implements SqsPort {
   private readonly urls = new Map<string, Promise<string>>();
 
-  constructor(private readonly client: SQSClient) {}
+  private readonly pollClient: SQSClient;
+
+  constructor(
+    private readonly client: SQSClient,
+    pollClient?: SQSClient,
+  ) {
+    this.pollClient = pollClient ?? client;
+  }
 
   async receive(queue: string, options: ReceiveOptions): Promise<SqsMessage[]> {
-    const out = await this.client.send(
+    const out = await this.pollClient.send(
       new ReceiveMessageCommand({
         QueueUrl: await this.urlOf(queue),
         MaxNumberOfMessages: options.max,
