@@ -476,11 +476,12 @@ Passos do consumidor, por mensagem:
 
 **Fila**:
 
-- transitório: backoff pela visibilidade (5, 10, 20, 40 s), e o redrive leva à DLQ no 6º recebimento;
+- transitório: backoff pela visibilidade, uma espera depois de cada um dos 5 recebimentos (5, 10, 20, 40 e 60 s), e o
+  redrive leva à DLQ no 6º recebimento;
 - permanente: DLQ direta;
 - inesperado: DLQ no 5º recebimento, com atributos (§11).
 
-Uma queda do banco mais longa que a soma das esperas (cerca de 75 s mais o long polling; medido: 150 s até a DLQ) leva
+Uma queda do banco mais longa que a soma das esperas (cerca de 135 s mais o long polling; medido: 150 s até a DLQ) leva
 mensagens **válidas** à DLQ, de onde podem ser reprocessadas por redrive manual (§20).
 
 **PENDING_REFERENCE** (I-21, I-63, I-64, I-72, I-73), tratado pelo worker agendado (`PENDING_WORKER_ENABLED`):
@@ -730,8 +731,8 @@ Outras decisões com impacto na avaliação:
 - **A transação FAILED responde 500 com `retryable` false** no replay (I-62), uma exceção documentada à regra
   "INTERNAL_ERROR é retryable".
 - **Referência que chega depois do esgotamento** não reabre a transação REJECTED `REFERENCE_NOT_FOUND`.
-- **Queda longa do banco leva mensagens válidas à DLQ** pelo redrive (cerca de 75 s de esperas mais o long polling;
-  medido em 150 s). Elas precisam de redrive manual.
+- **Queda longa do banco leva mensagens válidas à DLQ** pelo redrive (cerca de 135 s de esperas, 5 + 10 + 20 + 40 +
+  60, mais o long polling; medido em 150 s). Elas precisam de redrive manual.
 - **Grupo FIFO bloqueado** por mensagem em retry: a wallet espera até a mensagem sair.
 - **Ordem de eventos não garantida** entre publicadores concorrentes; consumidores devem usar `walletVersion` e
   `eventId`.
