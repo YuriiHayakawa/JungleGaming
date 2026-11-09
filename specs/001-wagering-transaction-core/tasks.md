@@ -628,12 +628,12 @@ parcial.
 
 ### Testes da User Story 8 (escrever primeiro; devem falhar)
 
-- [ ] T111 [P] [US8] Escrever `test/unit/ledger-cursor.test.ts` (I-36, I-47):
+- [X] T111 [P] [US8] Escrever `test/unit/ledger-cursor.test.ts` (I-36, I-47):
   - `encode(seq)` gera o base64url do `seq` em decimal, e `decode` faz a volta;
   - `decode` recusa base64url inválido, texto que não é inteiro de 1 a 19 dígitos e valor acima de 9223372036854775807;
   - o `seq` é tratado como string ou `bigint`, nunca `number`;
   - `limit` padrão 50; não inteiro, < 1 ou > 200 → erro.
-- [ ] T112 [P] [US8] Escrever `test/integration/queries.test.ts` (US8 cenários 3 a 5; FR-049, FR-052, FR-053, I-07, I-50, I-55):
+- [X] T112 [P] [US8] Escrever `test/integration/queries.test.ts` (US8 cenários 3 a 5; FR-049, FR-052, FR-053, I-07, I-50, I-55):
   - `GET /wallets/:id` → `{ id, playerId, balance, version }`;
   - `GET /wagering/transactions/:id` e `GET /providers/:p/wagering/transactions/:x` devolvem a mesma transação, com status 200 mesmo quando ela é REJECTED ou PENDING_REFERENCE, e trazem tipo, valor, status, `failureCode`, referências e `observedBalance`;
   - a abertura é consultável pelo id interno;
@@ -641,7 +641,7 @@ parcial.
   - `walletId` ou `transactionId` malformado na rota → 400 `VALIDATION_ERROR`; o mesmo id em maiúsculas encontra a mesma wallet ou transação (I-58);
   - providerId "system" na rota → 400;
   - **SC-011**: cada uma das rotas GET (wallet, ledger, transação por id e por provedor) responde em menos de 1 s, sem disputa.
-- [ ] T113 [P] [US8] Escrever `test/integration/ledger-pagination.test.ts` (US8 cenários 1, 2 e 4; FR-050, FR-051, SC-010, I-36, I-47):
+- [X] T113 [P] [US8] Escrever `test/integration/ledger-pagination.test.ts` (US8 cenários 1, 2 e 4; FR-050, FR-051, SC-010, I-36, I-47):
   - 120 lançamentos paginados com `limit` 50 → páginas de 50, 50 e 20, em ordem crescente, cada lançamento uma vez, e `nextCursor` null no fim;
   - com BETs sendo criadas em paralelo durante a paginação → nenhum lançamento já visto se repete nem é pulado;
   - cursor adulterado, `limit` 0, 201 ou "abc" → 400 `VALIDATION_ERROR`;
@@ -650,12 +650,12 @@ parcial.
 
 ### Implementação da User Story 8
 
-- [ ] T114 [P] [US8] Implementar `src/wallets/application/ledger-cursor.ts`. Faz o T111 passar
-- [ ] T115 [US8] Estender os repositórios (EM por parâmetro, SQL com `?`; FR-050, FR-052):
+- [X] T114 [P] [US8] Implementar `src/wallets/application/ledger-cursor.ts`. Faz o T111 passar
+- [X] T115 [US8] Estender os repositórios (EM por parâmetro, SQL com `?`; FR-050, FR-052):
   - `src/wallets/infrastructure/mikro-orm-ledger.repository.ts`: `listPage(em, walletId, afterSeq, limit)` com `WHERE wallet_id = ? AND seq > ? ORDER BY seq LIMIT ?`, buscando `limit + 1`;
   - `src/wagering/infrastructure/mikro-orm-wager-transaction.repository.ts`: `findById(em, id)`.
-- [ ] T116 [US8] Implementar `src/wallets/application/get-wallet.use-case.ts`, `src/wallets/application/list-ledger.use-case.ts` (`nextCursor` vindo do item extra) e `src/wagering/application/get-transaction.use-case.ts` (por id e por provedor + id externo; `TransactionNotFoundError`), todos em fork de leitura, sem transação de escrita (FR-049 a FR-053, I-55)
-- [ ] T117 [US8] Expor as rotas de consulta (FR-049 a FR-053, contrato em `contracts/openapi.yaml`):
+- [X] T116 [US8] Implementar `src/wallets/application/get-wallet.use-case.ts`, `src/wallets/application/list-ledger.use-case.ts` (`nextCursor` vindo do item extra) e `src/wagering/application/get-transaction.use-case.ts` (por id e por provedor + id externo; `TransactionNotFoundError`), todos em fork de leitura, sem transação de escrita (FR-049 a FR-053, I-55)
+- [X] T117 [US8] Expor as rotas de consulta (FR-049 a FR-053, contrato em `contracts/openapi.yaml`):
   - **`src/wallets/interfaces/http/wallets.controller.ts`**: `GET /wallets/:walletId` e `GET /wallets/:walletId/ledger`;
   - **`src/wagering/interfaces/http/wagering.controller.ts`**: `GET /wagering/transactions/:transactionId`;
   - **`src/wagering/interfaces/http/providers.controller.ts`**: `GET /providers/:providerId/wagering/transactions/:externalTransactionId`;

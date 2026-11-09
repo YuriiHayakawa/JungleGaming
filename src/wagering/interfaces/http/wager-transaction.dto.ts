@@ -54,6 +54,18 @@ export const submitWagerTransactionSchema = z
 
 export type SubmitWagerTransactionRequest = z.output<typeof submitWagerTransactionSchema>;
 
+/** Rota GET /wagering/transactions/:transactionId: UUID gerado pelo serviço, em minúsculas (I-50, I-58). */
+export const transactionIdParamSchema = z.object({ transactionId: serviceUuidSchema });
+
+/**
+ * Rota GET /providers/:providerId/wagering/transactions/:externalTransactionId: ids textuais de 1 a 255, case-sensitive
+ * (I-50, I-58); providerId "system" recusado (I-07), então a abertura nunca é alcançável por esta rota.
+ */
+export const providerTransactionParamsSchema = z.object({
+  providerId: identifierSchema.refine((value) => value !== 'system', 'providerId "system" is reserved'),
+  externalTransactionId: identifierSchema,
+});
+
 const bodyPipe = new ZodValidationPipe(submitWagerTransactionSchema);
 
 /** I-44 passo 1 (I-23, I-48): ausente ou vazio → IDEMPOTENCY_KEY_REQUIRED; mais de 255 ou repetido → VALIDATION_ERROR. */

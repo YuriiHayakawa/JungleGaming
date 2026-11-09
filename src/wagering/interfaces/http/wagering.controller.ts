@@ -1,10 +1,15 @@
-import { Body, Controller, Headers, Inject, Post, Res } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Inject, Param, Post, Res } from '@nestjs/common';
 import { setRequestContextValues } from '../../../platform/correlation/request-context.ts';
 import type { SubmitWagerTransactionUseCase } from '../../application/submit-wager-transaction.use-case.ts';
 import { httpStatusFor, type TransactionResult } from '../../application/transaction-result.ts';
-import { parseIdempotencyKey, parseSubmitWagerTransactionBody } from './wager-transaction.dto.ts';
+import { ZodValidationPipe } from '../../../platform/http/zod-validation.pipe.ts';
+import type { GetTransactionUseCase, TransactionView } from '../../application/get-transaction.use-case.ts';
+import { parseIdempotencyKey, parseSubmitWagerTransactionBody, transactionIdParamSchema } from './wager-transaction.dto.ts';
 
 export const SUBMIT_WAGER_TRANSACTION_USE_CASE = Symbol('SUBMIT_WAGER_TRANSACTION_USE_CASE');
+export const GET_TRANSACTION_USE_CASE = Symbol('GET_TRANSACTION_USE_CASE');
+
+const transactionIdPipe = new ZodValidationPipe(transactionIdParamSchema);
 
 interface StatusResponse {
   status(code: number): unknown;
@@ -17,7 +22,20 @@ interface StatusResponse {
  */
 @Controller('wagering/transactions')
 export class WageringController {
-  constructor(@Inject(SUBMIT_WAGER_TRANSACTION_USE_CASE) private readonly submitWager: SubmitWagerTransactionUseCase) {}
+  constructor(
+    @Inject(SUBMIT_WAGER_TRANSACTION_USE_CASE) private readonly submitWager: SubmitWagerTransactionUseCase,
+    @Inject(GET_TRANSACTION_USE_CASE) private readonly getTransaction: GetTransactionUseCase,
+  ) {}
+
+  /** GET /wagering/transactions/:transactionId → 200 Transaction em qualquer status (FR-052); 404 TRANSACTION_NOT_FOUND. */
+  @Get(':transactionId')
+  async get(@Param() params: unknown): Promise<TransactionView> {
+    const { transactionId } = transactionIdPipe.transform(params);
+    setRequestContextValues({ transactionId });
+    const view = await this.getTransaction.byId(transactionId);
+    setRequestContextValues({ walletId: view.walletId, providerId: view.providerId });
+    return view;
+  }
 
   @Post()
   async submit(

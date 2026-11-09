@@ -9,13 +9,19 @@ import { CLOCK, type Clock } from '../shared-kernel/domain/clock.port.ts';
 import { ID_GENERATOR, type IdGenerator } from '../shared-kernel/domain/id-generator.port.ts';
 import { MikroOrmLedgerRepository } from '../wallets/infrastructure/mikro-orm-ledger.repository.ts';
 import { MikroOrmWalletRepository } from '../wallets/infrastructure/mikro-orm-wallet.repository.ts';
+import { GetTransactionUseCase } from './application/get-transaction.use-case.ts';
 import { SubmitWagerTransactionUseCase } from './application/submit-wager-transaction.use-case.ts';
 import { MikroOrmWagerTransactionRepository } from './infrastructure/mikro-orm-wager-transaction.repository.ts';
-import { SUBMIT_WAGER_TRANSACTION_USE_CASE, WageringController } from './interfaces/http/wagering.controller.ts';
+import { ProvidersController } from './interfaces/http/providers.controller.ts';
+import {
+  GET_TRANSACTION_USE_CASE,
+  SUBMIT_WAGER_TRANSACTION_USE_CASE,
+  WageringController,
+} from './interfaces/http/wagering.controller.ts';
 
 /** Contexto de apostas: injeção só por token, sem emitDecoratorMetadata (research R-02). */
 @Module({
-  controllers: [WageringController],
+  controllers: [WageringController, ProvidersController],
   providers: [
     {
       provide: SUBMIT_WAGER_TRANSACTION_USE_CASE,
@@ -40,6 +46,11 @@ import { SUBMIT_WAGER_TRANSACTION_USE_CASE, WageringController } from './interfa
           ids,
           logger,
         }),
+    },
+    {
+      provide: GET_TRANSACTION_USE_CASE,
+      inject: [ORM],
+      useFactory: (orm: MikroORM) => new GetTransactionUseCase({ orm, transactions: new MikroOrmWagerTransactionRepository() }),
     },
   ],
 })

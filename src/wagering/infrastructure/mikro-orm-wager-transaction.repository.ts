@@ -9,6 +9,12 @@ export class MikroOrmWagerTransactionRepository {
     await em.insert(WagerTransactionRecord, WagerTransactionMapper.toRecord(tx));
   }
 
+  /** Busca pelo id interno (PK), em qualquer status (FR-052). */
+  async findById(em: EntityManager, id: string): Promise<WagerTransaction | null> {
+    const record = await em.findOne(WagerTransactionRecord, { id });
+    return record ? WagerTransactionMapper.toDomain(record) : null;
+  }
+
   /** Busca pela chave de idempotência escopada por provedor; usa `wager_tx_provider_idempotency_uq` (I-56). */
   async findByProviderAndIdempotencyKey(
     em: EntityManager,
