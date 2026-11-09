@@ -378,21 +378,21 @@ derrubar o SQS e conferir o acúmulo e a recuperação.
 
 ### Testes da User Story 3 (escrever primeiro; devem falhar)
 
-- [ ] T058 [P] [US3] Escrever `test/integration/outbox-publisher.test.ts` (US3 cenários 1, 3 e 5; FR-016 a FR-022; I-29,
+- [X] T058 [P] [US3] Escrever `test/integration/outbox-publisher.test.ts` (US3 cenários 1, 3 e 5; FR-016 a FR-022; I-29,
   I-31, I-32, I-65; SC-010), com `PUBLISHER_ENABLED=true` e `PUBLISHER_POLL_MS=100`: os eventos de uma BET aparecem em
   `wager-events` em até 5 s com o corpo igual ao `payload` gravado, `MessageGroupId` = `aggregateId` e deduplicação pelo
   `eventId`; `published_at` gravado; com a fila de eventos inacessível (proxy TCP na frente do MiniStack cortado), o
   envio falha, `published_at` continua nulo, `attempts` vira 1 e `next_attempt_at` avança 1 s, depois 2 s; o claim
   reserva no máximo 10 eventos e avança `next_attempt_at` em 30 s
-- [ ] T059 [P] [US3] Escrever `test/integration/sqs-outage.test.ts` (US3 cenário 4; FR-033, FR-035; I-34; SC-009), com o
+- [X] T059 [P] [US3] Escrever `test/integration/sqs-outage.test.ts` (US3 cenário 4; FR-033, FR-035; I-34; SC-009), com o
   proxy TCP na frente do MiniStack: com o proxy cortado, 10 BETs por HTTP respondem 201 e os eventos ficam pendentes na
   outbox; o consumidor e o publicador continuam vivos (sem exceção não tratada) e esperam com backoff; com o proxy
   restaurado, sem reiniciar a app, todos os eventos são publicados; termina com `assertWalletMatchesLedger`
-- [ ] T060 [P] [US3] Escrever `test/concurrency/concurrent-publishers.test.ts` (US3 cenários 2 e 3; FR-017, FR-019;
+- [X] T060 [P] [US3] Escrever `test/concurrency/concurrent-publishers.test.ts` (US3 cenários 2 e 3; FR-017, FR-019;
   I-31, I-65; SC-003, SC-008): 3 instâncias publicadoras e 200 eventos gerados por HTTP; uma delas com
   `FAILPOINT=before_publish_mark` sai depois do primeiro envio; ao final todo `eventId` aparece ao menos uma vez em
   `wager-events`, nenhuma linha fica com `published_at` nulo em até 60 s, e qualquer repetição tem o mesmo `eventId`
-- [ ] T061 [P] [US3] Escrever `test/concurrency/sigkill-recovery.test.ts`, o teste de SIGKILL no meio da carga
+- [X] T061 [P] [US3] Escrever `test/concurrency/sigkill-recovery.test.ts`, o teste de SIGKILL no meio da carga
   (SC-006, SC-008; FR-007, FR-013, FR-016): 3 instâncias com papéis diferentes (consumidor; consumidor + publicador;
   publicador), carga mista pela fila e por HTTP em 20 wallets (BET, WIN, LOSS, REFUND de BET existente e de referência
   inexistente); durante a carga, `SIGKILL` de uma instância aleatória três vezes, com substituição por outra de mesmo
@@ -403,18 +403,18 @@ derrubar o SQS e conferir o acúmulo e a recuperação.
 
 ### Implementação da User Story 3
 
-- [ ] T062 [US3] Implementar `src/outbox/infrastructure/mikro-orm-outbox.repository.ts` (data-model §3.2; R-34): `claim(em,
+- [X] T062 [US3] Implementar `src/outbox/infrastructure/mikro-orm-outbox.repository.ts` (data-model §3.2; R-34): `claim(em,
   now, batch, leaseMs)` em transação curta com `FOR UPDATE SKIP LOCKED` e avanço de `next_attempt_at`;
   `markPublished(em, id, at)` com `WHERE published_at IS NULL`; `scheduleRetry(em, message)` com os valores de
   `OutboxMessage.scheduleRetry`; SQL com `?`
-- [ ] T063 [US3] Implementar `src/outbox/application/publish-outbox.use-case.ts` (FR-016 a FR-022; I-31, I-65): claim →
+- [X] T063 [US3] Implementar `src/outbox/application/publish-outbox.use-case.ts` (FR-016 a FR-022; I-31, I-65): claim →
   `send` evento a evento (corpo = `payload`, grupo = `aggregate_id`, deduplicação = `id`) → failpoint
   `before_publish_mark` → marca só depois do envio aceito; falha de envio → `scheduleRetry`, sem afetar os outros do
   lote; atraso da outbox medido na marca (`outbox_lag_ms`)
-- [ ] T064 [US3] Implementar `src/outbox/interfaces/outbox-publisher.worker.ts` (provider com ciclo de vida, ligado por
+- [X] T064 [US3] Implementar `src/outbox/interfaces/outbox-publisher.worker.ts` (provider com ciclo de vida, ligado por
   `PUBLISHER_ENABLED`, `PollingLoop` com `PUBLISHER_POLL_MS`) e registrá-lo num módulo carregado pelo `src/app.module.ts`.
   Faz o T058 a T061 passarem
-- [ ] T065 [US3] Revisar o diff da US3 contra o `review-checklist.md`, com atenção a "publisher marca como publicado só
+- [X] T065 [US3] Revisar o diff da US3 contra o `review-checklist.md`, com atenção a "publisher marca como publicado só
   depois do SendMessage" e ao claim com `SKIP LOCKED`; registrar item a item
 
 **Checkpoint US3 (fim do MVP da 002)**: `bun test --preload ./test/support/db-setup.preload.ts

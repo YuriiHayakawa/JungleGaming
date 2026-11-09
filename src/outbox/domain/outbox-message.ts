@@ -13,10 +13,15 @@ export interface OutboxMessageState {
   publishedAt?: Date;
 }
 
-const RETRY_BASE_MS = 1_000;
-const RETRY_CAP_MS = 60_000;
+/** Backoff de publicação (I-31, I-65): de 1 a 60 s por padrão; configurável por PUBLISHER_BACKOFF_MIN_MS/MAX_MS. */
+export interface RetryBackoff {
+  minMs: number;
+  maxMs: number;
+}
 
-/** Mensagem da outbox transacional (enunciado §6.5). Nesta feature só é gravada; o publisher é da feature 2. */
+const DEFAULT_BACKOFF: RetryBackoff = { minMs: 1_000, maxMs: 60_000 };
+
+/** Mensagem da outbox transacional (enunciado §6.5). Gravada pela 001; publicada pelo publicador da 002 (I-31). */
 export class OutboxMessage {
   private constructor(
     readonly id: string,
@@ -86,10 +91,11 @@ export class OutboxMessage {
     this._publishedAt = at;
   }
 
-  /** Incrementa attempts e agenda a próxima tentativa com backoff exponencial (base 1 s, teto 60 s). */
-  scheduleRetry(now: Date): void {
+  /** Incrementa attempts e agenda a próxima tentativa com backoff exponencial (padrão: base 1 s, teto 60 s). */
+  scheduleRetry(now: Date, backoff: RetryBackoff = DEFAULT_BACKOFF): void {
+    if (this._publishedAt !== undefined) throw new Error(`outbox message ${this.id} is already published`);
     this._attempts += 1;
-    const delay = Math.min(RETRY_BASE_MS * 2 ** (this._attempts - 1), RETRY_CAP_MS);
+    const delay = Math.min(backoff.minMs * 2 ** (this._attempts - 1), backoff.maxMs);
     // Deriva do `now` recebido (porta Clock); o domínio nunca lê o relógio (constitution VI).
     const next = structuredClone(now);
     next.setTime(now.getTime() + delay);

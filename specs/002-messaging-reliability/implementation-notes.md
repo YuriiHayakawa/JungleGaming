@@ -72,3 +72,33 @@ Diff revisado: `message-classification.ts`, `consume-wager-message.use-case.ts` 
 | DLQ antes de apagar | OK | `apply` (`dlq`): `sqs.send(dlq, …)` aguardado antes de `sqs.delete(principal, …)`; se o envio falhar, a exceção sobe e o delete não acontece (T049 com o fake: ordem `send` → `delete` e nenhum delete quando o send falha; T050 e T052 com o MiniStack: mensagem na DLQ com os atributos e ausente da principal). |
 | Ausência de FAILED no consumidor | OK | O consumidor não chama `fail` nem grava FAILED; inesperado vai à DLQ no 5º recebimento (T052 confere zero linhas FAILED). |
 | Publisher marca depois do SendMessage | N/A | Publicador é da US3. |
+
+## US3
+
+| # | Decisão | Motivo | Task |
+|---|---------|--------|------|
+| N-17 | `OutboxMessage.scheduleRetry(now, backoff?)` ganhou o backoff opcional (padrão 1 a 60 s, os valores de antes); o publicador passa `PUBLISHER_BACKOFF_MIN_MS`/`MAX_MS`. | As variáveis existem (R-27, T002) com os mesmos padrões do I-65; sem isso ficariam validadas e ignoradas. Com os padrões, o comportamento é idêntico ao da 001 (teste unitário 1, 2, 4 … 60 s). | T063 |
+| N-18 | O claim usa duas instruções na transação curta (`SELECT … FOR UPDATE SKIP LOCKED` e `UPDATE … WHERE id IN (…)`), com placeholders `?` gerados por quantidade, e roda pela unit of work (lock_timeout e conversão de falha transitória). | Fidelidade ao data-model §3.2; listas de parâmetros explícitas evitam depender da expansão de arrays do driver. | T062 |
+| N-19 | Falha ao marcar (`markPublished`) ou ao reagendar depois de um envio é registrada e não interrompe o lote; o evento volta pelo lease. | Publicação ao menos uma vez (FR-019): reenvio com o mesmo eventId é seguro; derrubar o lote atrasaria os outros eventos (FR-018). | T063 |
+| N-20 | Limitação registrada: o prazo de uma chamada ao SQS é 30 s com até 2 tentativas do SDK (N-02), maior que o lease padrão de 30 s numa falha extrema; nesse caso outro publicador pode republicar o evento antes do primeiro terminar. O efeito é só uma duplicata com o mesmo eventId (deduplicada pela fila FIFO em 5 min e tolerada pelo consumidor, I-31). O ajuste fino do prazo de envio fica para a US6 (T081, falhas de SQS). | Não afeta corretude; registrado para não esconder a diferença em relação ao "lease > timeout de envio" do R-27. | T063, T081 |
+| N-21 | Os testes da US3 (T058–T061) foram escritos antes da implementação, mas não executados em vermelho antes dela: dependiam de um módulo inexistente (`mikro-orm-outbox.repository.ts`) e de eventos de log do publicador, então não podiam passar. | Registro honesto do processo TDD. | T058–T061 |
+
+### Revisão da US3 contra o review-checklist.md (T065)
+
+Diff revisado: `mikro-orm-outbox.repository.ts`, `publish-outbox.use-case.ts`, `outbox-publisher.worker.ts`, `outbox.module.ts`,
+`outbox-message.ts` (backoff configurável), `app.module.ts`.
+
+| Item | Resultado | Evidência |
+|------|-----------|-----------|
+| Dinheiro sem `number` | OK | O publicador não lê valores; o corpo é o `payload` jsonb gravado, com dinheiro já em string. |
+| Saldo só sob lock | N/A | O publicador não escreve saldo nem status de transação. |
+| Unicidade no banco | OK | Sem unicidade nova; a publicação repetida é segura pelo `eventId` (deduplicação FIFO e consumidor). |
+| Outbox na mesma transação | OK | O publicador só lê linhas já confirmadas (o claim roda numa transação própria depois do commit do efeito); nada é publicado dentro da transação de negócio (FR-020). |
+| Triggers presentes | N/A | Sem migration nova. |
+| Sem mock em integração e concorrência | OK | T058–T061 com MiniStack e PostgreSQL reais; a indisponibilidade da fila é um proxy TCP real cortado. |
+| Sem relógio nem id no domínio | OK | `now` vem do `Clock`; `scheduleRetry` deriva do `now` recebido. Varredura sem `new Date()`/`Date.now(` no diff. |
+| Ordem de lock wallet primeiro | N/A | O publicador não toca `wager_transactions` nem `wallets`. |
+| Ack só depois do commit | N/A | Sem consumo novo. |
+| DLQ antes de apagar | N/A | Sem DLQ nova. |
+| Publisher marca como publicado só depois do SendMessage | OK | `publish`: `await sqs.send(…)` → failpoint `before_publish_mark` → `markPublished` (`UPDATE … SET published_at = ? WHERE id = ? AND published_at IS NULL`, idempotente). Falha no envio → só `scheduleRetry` (`attempts`, `next_attempt_at`), nunca marca. T058 (falha de envio: `published_at` nulo, 1 s e 2 s), T060 (queda entre envio e marca: tudo publicado, nada pendente). |
+| Claim com `SKIP LOCKED` | OK | `claim`: `SELECT … WHERE published_at IS NULL AND next_attempt_at <= ? ORDER BY next_attempt_at LIMIT ? FOR UPDATE SKIP LOCKED` + avanço do lease, numa transação curta; dois claims seguidos não repetem linhas (T058) e 3 publicadores não se bloqueiam (T060, T061). |

@@ -83,3 +83,29 @@ test('rehydrate reconstrói o estado persistido', () => {
   expect(msg.nextAttemptAt).toEqual(state.nextAttemptAt);
   expect(msg.isPending()).toBe(true);
 });
+
+// ---- feature 002 (T063; I-31, I-65)
+
+test('scheduleRetry com os padrões: 1, 2, 4 … 60 s (I-65)', () => {
+  const msg = OutboxMessage.enqueue(event);
+  const now = new Date('2026-11-07T12:01:00.000Z');
+  const delays: number[] = [];
+  for (let i = 0; i < 8; i++) {
+    msg.scheduleRetry(now);
+    delays.push(msg.nextAttemptAt.getTime() - now.getTime());
+  }
+  expect(delays).toEqual([1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000]);
+  expect(msg.attempts).toBe(8);
+  expect(msg.isPending()).toBe(true);
+});
+
+test('scheduleRetry com o backoff configurado (PUBLISHER_BACKOFF_MIN_MS / MAX_MS)', () => {
+  const msg = OutboxMessage.enqueue(event);
+  const now = new Date('2026-11-07T12:01:00.000Z');
+  const delays: number[] = [];
+  for (let i = 0; i < 4; i++) {
+    msg.scheduleRetry(now, { minMs: 500, maxMs: 1_500 });
+    delays.push(msg.nextAttemptAt.getTime() - now.getTime());
+  }
+  expect(delays).toEqual([500, 1_000, 1_500, 1_500]);
+});
