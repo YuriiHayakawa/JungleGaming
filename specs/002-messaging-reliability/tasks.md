@@ -539,7 +539,7 @@ test/concurrency/graceful-sigterm.test.ts test/concurrency/signal-exit.test.ts`
 
 ### Testes da User Story 6 (escrever primeiro; devem falhar)
 
-- [ ] T080 [P] [US6] Escrever `test/integration/dependency-outage.test.ts` (US6 cenários 1 a 3; FR-033 a FR-035; I-30,
+- [X] T080 [P] [US6] Escrever `test/integration/dependency-outage.test.ts` (US6 cenários 1 a 3; FR-033 a FR-035; I-30,
   I-34), com proxies TCP na frente do PostgreSQL e do MiniStack e os três papéis ligados: SQS cortado → HTTP responde,
   consumidor, publicador e worker esperam com backoff de 1 a 30 s sem derrubar o processo; PostgreSQL cortado → nenhuma
   mensagem é confirmada nem vai à DLQ antes do limite, publicador e worker não gravam nada; com os dois restaurados, sem
@@ -547,7 +547,7 @@ test/concurrency/graceful-sigterm.test.ts test/concurrency/signal-exit.test.ts`
 
 ### Implementação da User Story 6
 
-- [ ] T081 [US6] Endurecer `src/platform/workers/polling-loop.ts` e os três trabalhadores (FR-033 a FR-035): falha de
+- [X] T081 [US6] Endurecer `src/platform/workers/polling-loop.ts` e os três trabalhadores (FR-033 a FR-035): falha de
   SQS (`ECONNREFUSED`, timeout, erro do SDK) e de PostgreSQL (classificador da 001) numa iteração → log, backoff e nova
   tentativa, nunca exceção não tratada; o laço do consumidor não apaga nem manda à DLQ por falha de infraestrutura
   própria. Faz o T080 passar

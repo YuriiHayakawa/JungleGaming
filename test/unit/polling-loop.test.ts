@@ -70,6 +70,51 @@ describe('PollingLoop', () => {
     expect(errors).toHaveLength(7);
   });
 
+  // T081 (US6; FR-033 a FR-035): as falhas reais de infraestrutura numa iteração — SDK do SQS (timeout, erro de serviço),
+  // erro de sistema (ECONNREFUSED), PostgreSQL (57P01, conexão perdida), valor que não é Error — viram log e backoff
+  // crescente; um `onError` que lança não derruba o laço; o primeiro sucesso volta ao intervalo normal.
+  test('SQS, rede e PostgreSQL fora: backoff crescente, nenhuma exceção escapa, retomada sem reinício', async () => {
+    const { waits, sleep } = recordingSleep();
+    const sdkTimeout = Object.assign(new Error('Connection timed out after 5000 ms'), { name: 'TimeoutError', $metadata: {} });
+    const sdkService = Object.assign(new Error('Service unavailable'), { name: 'ServiceUnavailable', $fault: 'server', $metadata: { httpStatusCode: 503 } });
+    const refused = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:4566'), { code: 'ECONNREFUSED', errno: -111, syscall: 'connect' });
+    const pgTerminated = Object.assign(new Error('terminating connection due to administrator command'), { code: '57P01' });
+    const failures: unknown[] = [sdkTimeout, sdkService, refused, pgTerminated, 'not an error', new Error('onError also throws')];
+    const logged: unknown[] = [];
+    let calls = 0;
+    const done = deferred();
+    const loop = new PollingLoop({
+      name: 'test',
+      intervalMs: 100,
+      sleep,
+      onError: (error) => {
+        logged.push(error);
+        if (error instanceof Error && error.message === 'onError also throws') throw new Error('logger down');
+      },
+      iteration: async () => {
+        calls += 1;
+        if (calls <= failures.length) throw failures[calls - 1];
+        if (calls === failures.length + 2) {
+          loop.stop();
+          done.resolve();
+        }
+      },
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => void unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      loop.start();
+      await done.promise;
+      expect(await loop.drain(1000)).toBe(true);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+    expect(waits).toEqual([1000, 2000, 4000, 8000, 16000, 30000, 100]);
+    expect(logged).toEqual(failures);
+    expect(unhandled).toEqual([]);
+  });
+
   test('uma exceção na iteração nunca escapa do laço (sem rejeição não tratada)', async () => {
     const { sleep } = recordingSleep();
     let calls = 0;

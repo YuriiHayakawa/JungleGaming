@@ -173,3 +173,28 @@ Diff revisado: `message-batch.ts` (`BatchHooks`, devolução das não iniciadas)
 | Ack só depois do commit | OK | O ack continua no `apply`, depois do `process` resolvido; a devolução no término usa `ChangeMessageVisibility`, nunca `DeleteMessage`. T078: `consumer.message` (ack) antes de `shutdown.workers_drained`. |
 | DLQ antes de apagar | N/A | Sem DLQ nova. |
 | Publisher marca só depois do SendMessage | N/A | Publicador não mudou. |
+
+## US6
+
+| # | Decisão | Motivo | Task |
+|---|---------|--------|------|
+| N-39 | O T081 não exigiu código de produção novo: o endurecimento pedido já estava nos commits anteriores. São eles: o `PollingLoop` com backoff de 1 a 30 s para qualquer erro, sem deixar exceção escapar (N-04, Fundação); o prazo de 5 s por chamada curta ao SQS e a parada do lote do publicador com backoff do laço (N-22); e o worker, que interrompe a rodada com o banco fora sem gravar nada (N-28, US4). O consumidor já classificava falha de banco como transitória, sem ack nem DLQ (US2). O T081 ficou com um teste unitário explícito dos formatos reais de falha numa iteração (erro do SDK do SQS com `$metadata`, `ECONNREFUSED`, `57P01` do PostgreSQL, valor que não é `Error`, `onError` que lança): backoff 1, 2, 4, 8, 16, 30 s, nenhuma rejeição não tratada e volta ao intervalo no primeiro sucesso. | Registro honesto: o T080 passou na primeira execução (2/2), com os dois proxies TCP reais. Não inventei mudança de código para "fazer o teste passar". | T080, T081 |
+| N-40 | No T080, a queda do PostgreSQL dura ~4 s com `CONSUMER_RETRY_BASE_SECONDS=1`, o que mantém os recebimentos abaixo do limite de 5. O teste confere que, durante a queda, nada muda no banco (transações, tentativas, outbox e inbox idênticas ao instante do corte), nenhuma mensagem é confirmada e a DLQ fica vazia. Com o banco de volta, sem reinício, as duas mensagens são processadas uma vez, a pendente é concluída e todos os eventos chegam a `wager-events`. | O FR-034 vale "antes do limite de recebimentos"; uma queda maior que a soma das esperas leva mensagens válidas à DLQ pelo redrive, limitação já registrada no plan ("Indisponibilidade"). | T080 |
+
+### Revisão da US6 contra o review-checklist.md
+
+Diff revisado: `test/integration/dependency-outage.test.ts` e `test/unit/polling-loop.test.ts` (sem código de produção novo; ver N-39).
+
+| Item | Resultado | Evidência |
+|------|-----------|-----------|
+| Dinheiro sem `number` | N/A | Sem código de produção. |
+| Saldo só sob lock | N/A | Sem código de produção. O T080 confere que nenhuma escrita acontece com o banco fora. |
+| Unicidade no banco | OK | Depois da volta do banco, cada mensagem tem uma linha de inbox e uma transação (T080). |
+| Outbox na mesma transação | OK | T080: nada é publicado nem gravado durante a queda; todos os eventos confirmados são publicados depois. |
+| Triggers presentes | N/A | Sem migration. |
+| Sem mock em integração e concorrência | OK | Proxies TCP reais na frente do PostgreSQL e do MiniStack; nenhum mock de banco nem de SQS. O teste unitário usa erros construídos à mão para o `PollingLoop`, que não fala com banco nem fila. |
+| Sem relógio nem id no domínio | N/A | Sem código de produção. |
+| Ordem de lock wallet primeiro | N/A | Sem código de produção. |
+| Ack só depois do commit | OK | T080: com o banco fora, nenhuma mensagem sai da fila (visíveis + invisíveis = 2) e nenhuma linha de inbox é gravada. |
+| DLQ antes de apagar | OK | T080: DLQ vazia durante e depois da queda (falha de infraestrutura própria nunca manda à DLQ). |
+| Publisher marca só depois do SendMessage | OK | T080: com o SQS fora, a outbox acumula sem `published_at`; com o SQS de volta, tudo é publicado. |
