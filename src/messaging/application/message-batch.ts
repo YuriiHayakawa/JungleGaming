@@ -28,6 +28,17 @@ export interface MessageHandler {
   apply(message: SqsMessage, action: MessageAction): Promise<void>;
 }
 
+/**
+ * Acompanhamento do término gracioso (FR-014, I-34): o consumidor sabe quais mensagens estão em andamento, para devolver
+ * a visibilidade das que não terminarem no prazo, e é avisado das recebidas e não iniciadas, que voltam na hora.
+ */
+export interface BatchHooks {
+  started?(message: SqsMessage): void;
+  finished?(message: SqsMessage): void;
+  /** Mensagem recebida e não iniciada porque a parada foi pedida; já voltou visível (`ChangeMessageVisibility` 0). */
+  returned?(message: SqsMessage): void;
+}
+
 /** Agrupa por MessageGroupId preservando a ordem de chegada dentro de cada grupo. */
 function byGroup(messages: SqsMessage[]): SqsMessage[][] {
   const groups = new Map<string, SqsMessage[]>();
@@ -45,6 +56,10 @@ function byGroup(messages: SqsMessage[]): SqsMessage[][] {
  * ordem; grupos diferentes em paralelo. A ação de cada mensagem só é aplicada depois que o processamento dela resolve.
  * Um erro numa mensagem não apaga a mensagem nem interrompe as outras: vai para `onError`. Devolve quantas mensagens
  * o lote trouxe.
+ *
+ * Término (FR-014): depois de `options.signal` abortado, nenhuma mensagem nova do lote é iniciada; as que faltam em cada
+ * grupo voltam visíveis na hora (`ChangeMessageVisibility` 0) para outra instância, sem esperar o prazo de visibilidade.
+ * As que já estavam em andamento terminam normalmente (commit e ack).
  */
 export async function consumeBatch(
   sqs: SqsPort,
@@ -52,19 +67,45 @@ export async function consumeBatch(
   options: ReceiveOptions,
   handler: MessageHandler,
   onError?: (error: unknown, message: SqsMessage) => void,
+  hooks: BatchHooks = {},
 ): Promise<number> {
   const messages = await sqs.receive(queue, options);
   await Promise.all(
     byGroup(messages).map(async (group) => {
-      for (const message of group) {
+      for (const [index, message] of group.entries()) {
+        if (options.signal?.aborted) {
+          await returnNotStarted(sqs, queue, group.slice(index), onError, hooks);
+          return;
+        }
+        hooks.started?.(message);
         try {
           const action = await handler.process(message);
           await handler.apply(message, action);
         } catch (error) {
           onError?.(error, message);
+        } finally {
+          hooks.finished?.(message);
         }
       }
     }),
   );
   return messages.length;
+}
+
+async function returnNotStarted(
+  sqs: SqsPort,
+  queue: string,
+  messages: SqsMessage[],
+  onError: ((error: unknown, message: SqsMessage) => void) | undefined,
+  hooks: BatchHooks,
+): Promise<void> {
+  for (const message of messages) {
+    try {
+      await sqs.changeVisibility(queue, message.receiptHandle, 0);
+      hooks.returned?.(message);
+    } catch (error) {
+      // Sem a devolução, a mensagem volta sozinha quando a visibilidade vencer: nada se perde.
+      onError?.(error, message);
+    }
+  }
 }

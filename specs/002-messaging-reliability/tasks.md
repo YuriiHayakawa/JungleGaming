@@ -508,20 +508,20 @@ com o T076 concluído.
 
 ### Testes da User Story 5 (escrever primeiro; devem falhar)
 
-- [ ] T077 [P] [US5] Escrever `test/integration/consumer-shutdown.test.ts` (US5 cenários 1 a 3; FR-014, FR-015; I-31,
+- [X] T077 [P] [US5] Escrever `test/integration/consumer-shutdown.test.ts` (US5 cenários 1 a 3; FR-014, FR-015; I-31,
   I-34, I-65; SC-007), com `app.close()` em processo: uma mensagem em andamento (presa no lock da wallet segurado por fora
   por 1 s) termina confirmada depois do commit; mensagens recebidas e ainda não iniciadas voltam visíveis
   (`ChangeMessageVisibility` 0) e são processadas uma vez por outra instância; com `CONSUMER_SHUTDOWN_TIMEOUT_MS` curto,
   a mensagem que não termina no prazo volta visível e é processada uma vez; eventos e pendentes reservados por uma
   instância encerrada são retomados por outra depois do lease; termina com `assertWalletMatchesLedger`
-- [ ] T078 [P] [US5] Escrever `test/concurrency/graceful-sigterm.test.ts` (FR-014; I-34; SC-007; R-30, R-35), com
+- [X] T078 [P] [US5] Escrever `test/concurrency/graceful-sigterm.test.ts` (FR-014; I-34; SC-007; R-30, R-35), com
   `container-instance` em `app-test` e em `app-test-init` com o consumidor ligado: uma mensagem em andamento (lock da
   wallet segurado por fora); `SIGTERM` → a instância conclui a mensagem, confirma e sai com 0 como PID 1; a mensagem é
   processada uma única vez
 
 ### Implementação da User Story 5
 
-- [ ] T079 [US5] Implementar a drenagem do consumidor em `src/messaging/interfaces/wager-transactions.consumer.ts` (FR-014):
+- [X] T079 [US5] Implementar a drenagem do consumidor em `src/messaging/interfaces/wager-transactions.consumer.ts` (FR-014):
   no `onApplicationShutdown`, aborta o long polling, conclui as mensagens em andamento até
   `CONSUMER_SHUTDOWN_TIMEOUT_MS` e devolve a visibilidade das não concluídas e das não iniciadas; publicador e worker
   param de reservar trabalho novo (FR-015). Faz o T077 e o T078 passarem

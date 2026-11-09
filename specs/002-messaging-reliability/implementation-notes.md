@@ -146,3 +146,30 @@ Diff revisado: `transaction-recorder.ts` (extraído do submit), `submit-wager-tr
 | DLQ antes de apagar | N/A | Sem DLQ nova. |
 | Publisher marca só depois do SendMessage | N/A | O publicador não mudou na US4 (os ajustes N-22/N-23 foram revisados antes, no commit próprio). |
 | Releitura sob o lock (atenção pedida pelo T076) | OK | `transactions.findById(em, pending.id)` depois do lock; status ≠ PENDING_REFERENCE → `skipped`, sem escrita. Referência e reversão existente também relidas sob o lock. T069: 20 rodadas de worker × BET, sempre PROCESSED, um CREDIT, nunca `REFERENCE_NOT_FOUND`. |
+
+## US5
+
+| # | Decisão | Motivo | Task |
+|---|---------|--------|------|
+| N-35 | Limitação observada: o término aborta o long polling só do lado do cliente (plan, "Encerramento gracioso"). No MiniStack, o `ReceiveMessage` abortado continua pendente no servidor até `CONSUMER_WAIT_SECONDS` e pode pegar uma mensagem que fique visível nessa janela (por exemplo, a devolvida por outra instância), escondendo-a por um prazo de visibilidade. Não há perda nem efeito duplicado: a mensagem volta quando a visibilidade vence e a inbox garante um único efeito. O AWS SQS documenta o mesmo comportamento para long polling interrompido. O código segue o plan (aborta o long polling). O T077 isola os cenários do arquivo: depois de fechar um consumidor que pode estar em long polling, espera `CONSUMER_WAIT_SECONDS` + 0,5 s (`closeConsumer`). | Diagnosticado pelos logs: a instância do cenário anterior fechou durante um long polling, e a mensagem devolvida 0,6 s depois no cenário seguinte ficou invisível sem ser processada (`ReceiptHandleIsInvalid` no `retry` atrasado da instância que a devolveu). A espera não enfraquece nenhuma asserção: só impede que um cenário herde o receive pendente do anterior. | T077, T079 |
+| N-36 | O consumidor registra no `WorkerRegistry` um trabalhador próprio, cujo `drain(prazo)` espera o laço e, se o prazo esgotar, devolve a visibilidade (0) das mensagens ainda em andamento **antes** de responder. Assim a devolução acontece antes de o `OrmLifecycle` fechar o pool, qualquer que seja a ordem dos hooks. As mensagens recebidas e não iniciadas voltam na hora em que o sinal de parada chega (`consumeBatch`), sem esperar o prazo. Logs: `consumer.message_returned` com `reason` `not_started` ou `shutdown_timeout`. | FR-014 e R-28: o Nest não garante a ordem entre providers no mesmo hook; o `drainAll` é o ponto de sincronização que o `OrmLifecycle` já espera. | T079 |
+| N-37 | Uma mensagem devolvida no prazo esgotado continua sendo processada na instância que está saindo: ela termina com rollback (lock ou conexão) ou com commit. No rollback, o `retry` dela tenta redefinir a visibilidade com o receipt handle antigo e pode falhar (`ReceiptHandleIsInvalid`), o que é só registrado. No commit, o ack com o handle antigo pode falhar e a reentrega vira duplicata pela inbox. | O FR-014 pede devolver a visibilidade das não concluídas; interromper uma transação em andamento não é possível sem fechar a conexão. Os dois desfechos são seguros (FR-004, FR-005). | T079 |
+| N-38 | O T078 já passou na primeira execução: a drenagem da mensagem em andamento existia desde a Fundação (o `drainAll` espera o laço). O que a US5 acrescentou foi a devolução das não iniciadas e das que estouram o prazo; isso é coberto pelo T077 (cenários 2 e 3). Conferido por mutação: sem a devolução das não iniciadas e sem a do prazo esgotado, os dois cenários falham. | Registro honesto do processo TDD. | T077, T078 |
+
+### Revisão da US5 contra o review-checklist.md
+
+Diff revisado: `message-batch.ts` (`BatchHooks`, devolução das não iniciadas), `wager-transactions.consumer.ts` (drain com devolução).
+
+| Item | Resultado | Evidência |
+|------|-----------|-----------|
+| Dinheiro sem `number` | N/A | Nenhum valor monetário no diff. |
+| Saldo só sob lock | N/A | O diff não escreve saldo nem status. |
+| Unicidade no banco | OK | A devolução pode causar uma segunda entrega da mesma mensagem; a unicidade continua sendo a PK da inbox (T077 cenário 3: uma transação e uma linha de inbox depois da devolução). |
+| Outbox na mesma transação | N/A | Sem gravação nova. |
+| Triggers presentes | N/A | Sem migration. |
+| Sem mock em integração e concorrência | OK | T077 em processo e T078 em container com PostgreSQL e MiniStack reais; o "em andamento" é um `FOR UPDATE` real. |
+| Sem relógio nem id no domínio | N/A | Sem código de domínio nem de aplicação com tempo. |
+| Ordem de lock wallet primeiro | N/A | Sem lock novo. |
+| Ack só depois do commit | OK | O ack continua no `apply`, depois do `process` resolvido; a devolução no término usa `ChangeMessageVisibility`, nunca `DeleteMessage`. T078: `consumer.message` (ack) antes de `shutdown.workers_drained`. |
+| DLQ antes de apagar | N/A | Sem DLQ nova. |
+| Publisher marca só depois do SendMessage | N/A | Publicador não mudou. |
