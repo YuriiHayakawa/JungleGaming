@@ -6,23 +6,31 @@
 ## 1. Pré-requisitos
 
 - Os da 001 (Bun 1.4.4, Docker com Compose) e o ambiente da 001 funcionando.
-- Spike S-12 aprovado e a imagem do emulador fixada no `docker-compose.yml` ([research.md §0](research.md)).
+- Emulador MiniStack `ministackorg/ministack:1.5.32` (serviço `sqs` do Compose), adotado no spike S-12
+  ([research.md §0](research.md)); o LocalStack 2026.10.2 exige token e não é usado.
+- Para os exemplos com fila: o `aws` CLI v2 no host, com credenciais fictícias (`AWS_ACCESS_KEY_ID=test`,
+  `AWS_SECRET_ACCESS_KEY=test`, `AWS_REGION=us-east-1`). Sem o CLI, os mesmos passos podem ser feitos com um script `bun`
+  sobre o `@aws-sdk/client-sqs` (o próprio `scripts/queue-init.ts` serve de base).
 - `.env` com as variáveis novas do `.env.example` (SQS, papéis e tempos; research R-27).
 
 ## 2. Subir o ambiente
 
 ```bash
 docker compose --profile cluster up -d --build
-# postgres → migrate → localstack → sqs-init (cria as 3 filas FIFO e o redrive) → app1, app2, app3
+# postgres → migrate; sqs (MiniStack, healthcheck em Python) → queue-init (cria as 3 filas FIFO e o redrive, idempotente)
+# → app1, app2, app3 (dependem de migrate e queue-init com service_completed_successfully)
 docker compose ps
 ```
 
-Esperado: `migrate` e `sqs-init` terminam com código 0; `app1` (HTTP + consumidor), `app2` (HTTP + consumidor +
+Esperado: `migrate` e `queue-init` terminam com código 0 (rodar `docker compose run --rm queue-init` de novo também
+termina com 0, sem duplicar filas); `app1` (HTTP + consumidor), `app2` (HTTP + consumidor +
 publicador) e `app3` (HTTP + publicador + worker) no ar, cada um com a linha `http.listening` no log.
 
-Para enviar e ler mensagens, os exemplos usam o `awslocal` de dentro do container do LocalStack (com MiniStack, o
-`aws` CLI com `--endpoint-url`). Chame de `Q` a URL de `wager-transactions.fifo`, `DLQ` a da DLQ e `EV` a de
-`wager-events.fifo` (`awslocal sqs get-queue-url --queue-name ...`).
+Para enviar e ler mensagens, os exemplos usam o `aws` CLI do host apontado para o emulador: `alias awsq="aws
+--endpoint-url http://localhost:4566"` (a imagem do MiniStack não traz `awslocal` nem o `aws` CLI). Chame de `Q` a
+URL de `wager-transactions.fifo`, `DLQ` a da DLQ e `EV` a de
+`wager-events.fifo` (`awsq sqs get-queue-url --queue-name ...`). Envio: `awsq sqs send-message --queue-url $Q
+--message-group-id <walletId> --message-deduplication-id <messageId> --message-body file://msg.json`.
 
 ## 3. Cenários
 
@@ -48,11 +56,13 @@ Para enviar e ler mensagens, os exemplos usam o `awslocal` de dentro do containe
 
 ### 3.3 Eventos publicados (US3)
 
-1. Depois do 3.1, ler `EV` (`awslocal sqs receive-message --queue-url $EV --max-number-of-messages 10`): o
+1. Depois do 3.1, ler `EV` (`awsq sqs receive-message --queue-url $EV --max-number-of-messages 10 --message-attribute-names All`): o
    `WalletBalanceChanged` e o `WagerTransactionProcessed` da BET, com `causationId` = `correlationId` = `messageId`,
    conforme [integration-events.schema.json](contracts/integration-events.schema.json).
-2. `docker compose stop localstack`; submeter BETs por HTTP: respostas 201 normais. `docker compose start
-   localstack` (e o `sqs-init`, se as filas forem recriadas): em alguns segundos os eventos acumulados aparecem em `EV`.
+2. `docker compose stop sqs`; submeter BETs por HTTP: respostas 201 normais. `docker compose start sqs` e
+   `docker compose run --rm queue-init` (idempotente; necessário se o emulador tiver perdido as filas no reinício, o que
+   o spike não mediu): em alguns segundos os eventos
+   acumulados aparecem em `EV`.
 
 ### 3.4 Pendente concluída sozinha (US4)
 
@@ -69,17 +79,19 @@ Para enviar e ler mensagens, os exemplos usam o `awslocal` de dentro do containe
 2. Ao final, conferir por SQL (a reconciliação é de outra feature) que toda wallet tem saldo igual ao ledger, que
    nenhum evento ficou com `published_at` nulo e que nenhuma pendente está vencida há mais que um lease. O teste de
    concorrência `sigkill-recovery` (seção 4) faz essa mesma conferência automaticamente.
-3. `docker compose stop app1` (SIGTERM, `stop_grace_period` 30 s): o log mostra o término do consumidor dentro do prazo
+3. `docker compose stop app1` (SIGTERM, `stop_grace_period` 30 s): o handler próprio de sinal (R-35) fecha a app; o log
+   mostra o término do consumidor dentro do prazo
    e saída 0; mensagens não concluídas voltam visíveis para `app2`.
 
 ## 4. Testes
 
 ```bash
-docker compose up -d postgres localstack
+docker compose up -d postgres sqs
 bun run typecheck
 bun run test:unit
-bun run test:integration      # PostgreSQL + LocalStack reais; filas e banco próprios por arquivo
+bun run test:integration      # PostgreSQL + MiniStack reais; filas e banco próprios por arquivo
 bun run test:concurrency      # 3 processos com papéis diferentes; SIGKILL no meio da carga; SIGTERM em container
+                              # Linux (docker compose run, com e sem --init): saída 0 como PID 1
 ```
 
 Esperado: tudo verde; em especial `message-burst` (50 entregas → 1 efeito), `crash-before-ack`,

@@ -3,16 +3,16 @@
 **Feature**: `002-messaging-reliability` | **Date**: 2026-11-08 | **Plan**: [plan.md](plan.md)
 
 Decisões técnicas da Fase 0, no formato Decision / Rationale / Alternatives, com o FR ou I-xx que as motiva. A
-numeração continua a da feature 001 (R-01 a R-19 seguem valendo); esta feature usa R-20 a R-34 e o spike S-12.
+numeração continua a da feature 001 (R-01 a R-19 seguem valendo); esta feature usa R-20 a R-35 e o spike S-12.
 
 ## 0. Spike S-12 (obrigatório)
 
-> **EXECUTADO em 2026-11-08.** Resultado: **o LocalStack 2026.10.2 reprovou no S-12.1 (exige token)**; a alternativa
-> registrada, **MiniStack 1.5.32, foi adotada** e aprovou todos os itens de fila (S-12.1 a S-12.7 e S-12.9).
-> **S-12.8 reprovou pelo critério literal**: com `enableShutdownHooks()` do Nest, o processo drena mas não sai com 0
-> (trava como PID 1, ou sai com 143 com `--init`); a alternativa medida (handler próprio de SIGTERM que chama
-> `app.close()` e `process.exit(0)`) sai com 0. As mudanças que isso pede no plan, na data-model e nas tasks estão em
-> [0.4](#04-mudanças-propostas-não-aplicadas) e **não foram aplicadas** (aguardam o usuário).
+> **EXECUTADO E APROVADO em 2026-11-08, com duas alternativas adotadas.** O LocalStack 2026.10.2 reprovou no S-12.1
+> (exige token); a alternativa registrada, **MiniStack 1.5.32**, foi adotada e aprovou todos os itens de fila (S-12.1 a
+> S-12.7 e S-12.9). No S-12.8, o `enableShutdownHooks()` do Nest drena mas não sai com 0 (trava como PID 1, ou sai
+> com 143 com `--init`); a alternativa medida, **handler próprio de sinal** que chama `app.close()` e
+> `process.exit(0)`, sai com 0 e foi adotada (R-35). As mudanças do §0.4 foram aprovadas pelo usuário e aplicadas ao
+> plan, ao quickstart e às tasks em 2026-11-08; a data-model não mudou.
 
 Código descartável em `spike/s12/` (o `spike/` da 001, na raiz, não foi tocado).
 
@@ -71,9 +71,12 @@ Medido, não presumido. O MiniStack 1.5.32 **aplica** as três semânticas que o
 A janela de 5 min em si (expiração da deduplicação depois de 5 min) não foi medida; nenhum requisito depende dela.
 Também não foi medido o LocalStack nesses pontos, porque ele não sobe sem token.
 
-### 0.4 Mudanças propostas (não aplicadas)
+### 0.4 Mudanças decorrentes do spike (aplicadas)
 
-Pedem aprovação do usuário antes de entrar no plan, na data-model e nas tasks:
+Propostas na execução do spike e **aprovadas e aplicadas em 2026-11-08**, com dois acréscimos do usuário: o serviço
+`queue-init` idempotente (script `bun` com o SDK, depois do healthcheck; as apps dependem dele com
+`service_completed_successfully`) e, no handler de sinal, sinal repetido ignorado, temporizador de segurança e saída 1
+em erro no `close()` (R-35). Texto original da proposta:
 
 1. **Emulador = MiniStack 1.5.32** (S-12.1):
    - **plan.md**: Technical Context ("Messaging" e "Testing"), Constitution Check (linha Stack), Deploy local e
@@ -120,7 +123,7 @@ A tabela acima é a de critérios, definida no plan antes da execução; os resu
 |-----------------|--------|--------------|------------|
 | `@aws-sdk/client-sqs` | 3.1156.0 | 2026-10-22 | estável mais recente com 14 dias ou mais em 2026-11-08 (critério da 001); `latest` = 3.1164.0 (2026-11-06) |
 | `localstack/localstack` | 2026.10.2 | 2026-10-22 | **reprovado no S-12.1**: exige `LOCALSTACK_AUTH_TOKEN` |
-| `ministackorg/ministack` | 1.5.32 | 2026-10-23 | **adotado** (I-43): aprovado no S-12; troca no plan pendente de aprovação (§0.4) |
+| `ministackorg/ministack` | 1.5.32 | 2026-10-23 | **adotado** (I-43): aprovado no S-12 e aplicado ao plan em 2026-11-08 |
 
 As demais versões são as da 001 (research da 001, §1), sem troca.
 
@@ -263,7 +266,7 @@ As demais versões são as da 001 (research da 001, §1), sem troca.
   iteração falhou por indisponibilidade), aceita `stop()` cooperativo com `AbortSignal` repassado ao long polling e
   expõe `drain(timeoutMs)`. `WorkerRegistry` conhece os trabalhadores ativos; cada trabalhador se registra no
   `onApplicationBootstrap` e para no `onApplicationShutdown`; o `OrmLifecycle` chama `registry.drainAll()` antes de
-  `orm.close()`.
+  `orm.close()`. Os hooks são disparados pelo `app.close()` do handler próprio de sinal (R-35).
 - **Rationale**: FR-014, FR-015, I-34. O Nest não garante a ordem entre providers no mesmo hook; sem o registry, o pool
   poderia fechar com uma transação de trabalhador em andamento.
 - **Alternatives**: `beforeApplicationShutdown` nos trabalhadores (rejeitado pela instrução de usar
@@ -286,11 +289,28 @@ As demais versões são as da 001 (research da 001, §1), sem troca.
 ### R-30 SIGTERM real em container
 
 - **Decision**: o teste de término gracioso sobe a instância num container `oven/bun:1.4.4` na rede do Compose
-  (`docker compose run`), aponta para o PostgreSQL e o LocalStack pelos nomes de serviço e envia `docker kill --signal
-  SIGTERM`. O harness (`test/support/container-instance.ts`) espera a saída e confere o código 0. Em todas as
-  plataformas há também o teste em processo com `app.close()`, que dispara os mesmos hooks.
+  (`docker compose run`), com e sem `--init`, aponta para o PostgreSQL e o MiniStack (serviço `sqs`) pelos nomes de
+  serviço, coloca uma mensagem em andamento e envia `docker kill --signal SIGTERM`. O harness
+  (`test/support/container-instance.ts`) espera a saída e confere o código 0 como PID 1 e a drenagem da mensagem
+  (concluída e confirmada, ou devolvida e processada uma vez por outra instância). Em todas as plataformas há também o
+  teste em processo com `app.close()`, que dispara os mesmos hooks.
 - **Rationale**: FR-014, SC-007; no Windows o SIGTERM do `Bun.spawn` vira término forçado (001, S-10).
 - **Alternatives**: pular o teste fora de Linux (rejeitado: regra de não pular testes).
+
+### R-35 Handler próprio de sinal no `main.ts`
+
+- **Decision**: `src/main.ts` deixa de chamar `app.enableShutdownHooks()` e registra um handler próprio:
+  - `SIGTERM` e `SIGINT` → `app.close()` (dispara os `onApplicationShutdown`, inclusive o drain do `WorkerRegistry`, R-28)
+    → `process.exit(0)`;
+  - sinal repetido durante o encerramento é ignorado;
+  - temporizador de segurança de `CONSUMER_SHUTDOWN_TIMEOUT_MS` + 5 s força `process.exit(1)` (`unref`, para não
+    segurar o processo);
+  - erro no `close()` sai com 1.
+- **Rationale**: spike S-12.8. O `enableShutdownHooks` reemite o sinal depois dos hooks; como PID 1 do container o
+  processo não sai, e com `--init` sai com 143. O handler próprio sai com 0 nos dois casos (medido). Corrige também o
+  `main.ts` da 001 (FR-014, I-34).
+- **Alternatives**: `init: true` no Compose mantendo o `enableShutdownHooks` (rejeitado: saída 143 em vez de 0);
+  `process.exit` dentro de um hook (rejeitado: a ordem entre providers não é garantida).
 
 ### R-31 Filas por arquivo de teste
 
@@ -336,3 +356,12 @@ As demais versões são as da 001 (research da 001, §1), sem troca.
 As leituras de interpretação deste plan foram registradas como I-70 a I-73 em 2026-11-08 ([plan.md, Pendências de
 decisão](plan.md#pendências-de-decisão)). O resultado do spike S-12 está no §0.
 
+
+## 4. Limitações (itens a escrever no `ARCHITECTURE.md`)
+
+- **Testes contra emulador**: todos os testes de integração e de concorrência rodam contra o MiniStack 1.5.32. O spike
+  S-12 mediu que ele aplica a deduplicação FIFO, o redrive e o bloqueio por grupo, mas **a fidelidade à AWS real não
+  foi validada** em precisão de timers (visibilidade, long polling) e na expiração da janela de deduplicação de 5 min.
+  Comportamentos que dependam desses pontos na AWS real ficam como risco documentado.
+- **LocalStack**: a versão 2026.10.2 exige `LOCALSTACK_AUTH_TOKEN`; o projeto não depende de conta nem de token
+  (I-43).

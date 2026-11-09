@@ -32,8 +32,9 @@ Garantias continuam no banco: inbox com PK `(consumer_name, message_id)`, idempo
 única de lock (wallet primeiro, linhas de transação depois). A fila é otimização (constitution III).
 
 Stack: a da 001 (Bun 1.4.4, TypeScript strict, NestJS 12.2.0, MikroORM 7.2.5, PostgreSQL, decimal.js, Zod) mais
-`@aws-sdk/client-sqs` 3.1156.0, contra LocalStack (ou MiniStack, I-43) em container. **Spike S-12 obrigatório antes da
-implementação** ([research.md §0](research.md#0-spike-s-12-obrigatório)).
+`@aws-sdk/client-sqs` 3.1156.0, contra o MiniStack 1.5.32 em container (I-43). **Spike S-12 executado e aprovado** em
+2026-11-08, com duas alternativas adotadas: MiniStack no lugar do LocalStack, que exigiu token, e handler próprio de
+sinal no lugar do `enableShutdownHooks()` ([research.md §0](research.md#0-spike-s-12-obrigatório)).
 
 ## Technical Context
 
@@ -48,13 +49,17 @@ Nenhuma coluna nova nas tabelas da 001 (data-model §2).
 
 **Messaging**: SQS emulado. Filas FIFO `wager-transactions.fifo` (entrada), `wager-transactions-dlq.fifo` (DLQ por
 redrive com `maxReceiveCount` 5) e `wager-events.fifo` (saída da outbox). `MessageGroupId` = `walletId`;
-`MessageDeduplicationId` = `messageId` na entrada e `eventId` na saída (I-29, I-30). Imagem candidata
-`localstack/localstack:2026.10.2` (2026-10-22); alternativa `ministackorg/ministack:1.5.32` (2026-10-23), se o
-LocalStack exigir token (I-43). Decidido pelo spike S-12.
+`MessageDeduplicationId` = `messageId` na entrada e `eventId` na saída (I-29, I-30). Emulador
+`ministackorg/ministack:1.5.32` (2026-10-23, digest `sha256:c3afdc0f…`), adotado pelo spike S-12: o
+`localstack/localstack:2026.10.2` exigiu `LOCALSTACK_AUTH_TOKEN` e não sobe sem ele (I-43). O MiniStack aplica de
+verdade a deduplicação FIFO, o redrive e o bloqueio por grupo (research §0.3). Os testes rodam contra o emulador; a
+fidelidade à AWS real (precisão de timers, expiração da janela de deduplicação de 5 min) não foi validada (limitação
+registrada para o `ARCHITECTURE.md`).
 
 **Testing**: `bun test`, com PostgreSQL e SQS reais (constitution VII). Cada arquivo de teste usa o próprio banco
 (001, R-17) **e as próprias filas**, criadas com prefixo único e apagadas no fim (R-31). Concorrência com 3 processos
-reais e papéis diferentes. Término gracioso por SIGTERM testado em container Linux (R-30).
+reais e papéis diferentes. Término gracioso por SIGTERM testado em container Linux, com e sem `--init`, conferindo
+saída 0 como PID 1 (R-30).
 
 **Target Platform**: Linux em container (`oven/bun:1.4.4`); desenvolvimento local em Windows/macOS/Linux com Docker.
 
@@ -69,8 +74,10 @@ uma unidade de trabalho (aquisição de conexão + lock + margem); prazo de tér
 
 **Scale/Scope**: 3 filas, 3 trabalhadores, 2 migrations, 3 instâncias no profile `cluster` com papéis diferentes.
 
-**Spike**: S-12 **pendente**; é a primeira task da implementação e bloqueia as demais que tocam SQS. Critérios e
-alternativas em [research.md §0](research.md#0-spike-s-12-obrigatório).
+**Spike**: S-12 **executado e aprovado** em 2026-11-08 ([research.md §0](research.md#0-spike-s-12-obrigatório)).
+S-12.1 aprovou com a alternativa (MiniStack 1.5.32; o LocalStack 2026.10.2 exigiu token); S-12.2 a S-12.7 e S-12.9
+aprovaram no MiniStack; S-12.8 aprovou com a alternativa (handler próprio de sinal: `app.close()` e `process.exit(0)`,
+saída 0 como PID 1, com e sem `--init`). Nenhuma alternativa mudou a data-model.
 
 ## Constitution Check
 
@@ -89,7 +96,7 @@ alternativas em [research.md §0](research.md#0-spike-s-12-obrigatório).
 | VII | Testes reais | `bun test` para unitários, integração e concorrência; PostgreSQL e SQS reais em containers, sem mocks (T118 estendido às regras de SQS, R-33); 3 processos reais; SIGKILL no meio da carga e SIGTERM em container Linux; `assertWalletMatchesLedger` ao fim de todo teste que toca wallet; cenários §13 do enunciado cobertos na [matriz](#matriz-de-testes). | ✅ | ✅ |
 | VIII | Observabilidade e contrato | Logs JSON com `messageId`, `correlationId` (= `messageId` na fila, I-69), `transactionId`, `walletId`, `providerId`, sem valores monetários (FR-037). Porta de métricas com os contadores exigidos (FR-036); exposição e health checks ficam para outra feature, como na 001. Atributos `errorCode` e `errorClass` nas mensagens da DLQ (FR-040, I-68). Replay de FAILED com `retryable` false (I-62). | ✅ | ✅ |
 | IX | Documentação | `README.md` e `ARCHITECTURE.md` estão adiados para o fim do projeto por decisão registrada no tasks da 001 (T119, T120); este plan lista o que precisa entrar neles ([Documentação](#documentação)). O gate de documentação da constitution continua pendente até esse fechamento, já anotado. | ✅* | ✅* |
-| — | Stack | Bun, TS strict, NestJS, PostgreSQL, MikroORM, MikroORM Migrations, Docker Compose e SQS via LocalStack ou MiniStack. | ✅ | ✅ |
+| — | Stack | Bun, TS strict, NestJS, PostgreSQL, MikroORM, MikroORM Migrations, Docker Compose e SQS via MiniStack 1.5.32 (a constitution aceita LocalStack ou MiniStack; o LocalStack exigiu token no spike S-12, I-43). | ✅ | ✅ |
 
 \* IX: exceção temporária decidida pelo usuário em 2026-11-08 (tasks da 001), registrada em
 [Complexity Tracking](#complexity-tracking). Não é exceção a princípio NÃO-NEGOCIÁVEL.
@@ -107,7 +114,8 @@ alternativas em [research.md §0](research.md#0-spike-s-12-obrigatório).
 | 7 | Ledger não auditável | nada muda no ledger; a resolução grava lançamento pelo mesmo caminho da 001 | `assertWalletMatchesLedger` em todos os testes | ✅ |
 | 8 | Testes que trocam PG e SQS por mocks | PostgreSQL e SQS reais; T118 estendido proíbe mock de cliente SQS em integração e concorrência (R-33) | estrutura de `test/` + T118 | ✅ |
 
-**Resultado do gate**: aprovado antes e depois do design. Bloqueio de implementação até o spike S-12 aprovar.
+**Resultado do gate**: aprovado antes e depois do design. Spike S-12 aprovado (com as alternativas registradas);
+implementação liberada.
 
 ## Project Structure
 
@@ -134,6 +142,7 @@ Só o que é novo ou muda; o resto segue a estrutura da 001.
 
 ```text
 src/
+├── main.ts                                        # handler próprio de SIGTERM/SIGINT no lugar de enableShutdownHooks (R-35)
 ├── platform/
 │   ├── config/app-config.ts                       # + variáveis de SQS, papéis e tempos (R-27)
 │   ├── correlation/request-context.ts             # + messageId e causationId no contexto (FR-037, I-69)
@@ -172,7 +181,7 @@ src/
 migrations/
 ├── Migration20261108000100.ts                     # inbox_messages + trigger de imutabilidade
 └── Migration20261108000200.ts                     # índices parciais do worker de PENDING_REFERENCE
-scripts/sqs-setup.ts                               # cria as filas FIFO e o redrive (Compose e testes)
+scripts/queue-init.ts                              # init idempotente: filas FIFO, DLQ e redrive (Compose e testes)
 
 test/
 ├── unit/{wager-message-envelope, message-classification, pending-reference-policy, inbox-message,
@@ -184,7 +193,7 @@ test/
 ├── concurrency/{message-burst, crash-before-ack, concurrent-publishers, pending-worker-instances,
 │                pending-resolution-race, pending-order, sigkill-recovery, graceful-sigterm}.test.ts
 └── support/{test-queues.ts, sqs-client.ts, container-instance.ts}   # + instance-cluster com papéis
-docker-compose.yml                                 # + localstack, sqs-init, papéis por instância
+docker-compose.yml                                 # + sqs (MiniStack), queue-init, papéis por instância
 ```
 
 **Structure Decision**: mantém os módulos por contexto da 001 e acrescenta `messaging` (consumo) e `inbox`. O
@@ -314,11 +323,23 @@ transação de origem e só faz `UPDATE` das dependentes. Inbox e outbox são li
 
 ### Encerramento gracioso (FR-014, FR-015, I-34)
 
-`enableShutdownHooks` (001) dispara `onApplicationShutdown` em SIGTERM e em `app.close()`. Cada trabalhador para de
-reservar trabalho novo (aborta o long polling) e drena o que está em andamento até `CONSUMER_SHUTDOWN_TIMEOUT_MS`. O
-consumidor devolve a visibilidade (`ChangeMessageVisibility` 0) das mensagens recebidas e não concluídas no prazo. O
-`OrmLifecycle` aguarda o `WorkerRegistry` drenar antes de fechar o pool, porque a ordem entre providers no mesmo hook
-não é garantida (R-28). O `stop_grace_period` do Compose é maior que o prazo (R-27).
+**Handler próprio de sinal** no `src/main.ts`, no lugar de `app.enableShutdownHooks()` (spike S-12.8, R-35): o
+`enableShutdownHooks` drena, mas reemite o sinal depois dos hooks; como PID 1 do container o processo não sai (o Linux
+ignora o sinal sem handler) e, com `--init`, sai com 143. O handler:
+
+- `SIGTERM` e `SIGINT` chamam `app.close()`, que dispara os mesmos `onApplicationShutdown` (inclusive o drain do
+  `WorkerRegistry`), e depois `process.exit(0)`;
+- sinal repetido durante o encerramento é ignorado;
+- temporizador de segurança de `CONSUMER_SHUTDOWN_TIMEOUT_MS` + margem (5 s) força `process.exit(1)` se o `close()`
+  não terminar;
+- erro no `close()` sai com 1.
+
+Cada trabalhador para de reservar trabalho novo (aborta o long polling) e drena o que está em andamento até
+`CONSUMER_SHUTDOWN_TIMEOUT_MS`. O consumidor devolve a visibilidade (`ChangeMessageVisibility` 0) das mensagens recebidas
+e não concluídas no prazo. O `OrmLifecycle` aguarda o `WorkerRegistry` drenar antes de fechar o pool, porque a ordem
+entre providers no mesmo hook não é garantida (R-28). O `stop_grace_period` do Compose (30 s) é maior que o prazo mais a
+margem (R-27). Os hooks deixam de receber o nome do sinal (`app.close()` não o repassa); nada depende dele. A mudança
+também corrige o `main.ts` da 001, que hoje, no container, drena e espera o SIGKILL do Docker.
 
 ### Indisponibilidade (FR-033 a FR-035)
 
@@ -344,15 +365,20 @@ As da 001 continuam (SQL com `?`, EM da transação dentro de `transactional()`,
 
 `docker-compose.yml` ganha:
 
-- `localstack` (imagem fixada pelo spike), healthcheck do serviço SQS;
-- `sqs-init`: `bun scripts/sqs-setup.ts`, cria as 3 filas FIFO e o redrive (`maxReceiveCount` 5), depende do
-  `localstack` saudável;
+- `sqs`: `ministackorg/ministack:1.5.32`, porta 4566; healthcheck em Python, porque a imagem não tem `curl`, `wget`
+  nem `aws` CLI: `python -c "import urllib.request; urllib.request.urlopen('http://localhost:4566/_localstack/health')"`;
+- `queue-init`: serviço de inicialização idempotente (`bun scripts/queue-init.ts`, com o `@aws-sdk/client-sqs`) que cria
+  `wager-transactions-dlq.fifo`, `wager-transactions.fifo` com o redrive (`maxReceiveCount` 5) e `wager-events.fifo`,
+  todas FIFO com `ContentBasedDeduplication=false`; rodar de novo não falha nem duplica (CreateQueue com os mesmos
+  atributos é idempotente; atributos divergentes são reaplicados por `SetQueueAttributes`). Depende do `sqs` saudável
+  (`service_healthy`);
+- as apps dependem do `migrate` e do `queue-init` com `service_completed_successfully`;
 - `app1`: HTTP + consumidor; profile `cluster`: `app2` HTTP + consumidor + publicador; `app3` HTTP + publicador +
   worker de PENDING_REFERENCE (papéis por `CONSUMER_ENABLED`, `PUBLISHER_ENABLED`, `PENDING_WORKER_ENABLED`);
-- `stop_grace_period: 30s` nas apps.
+- `stop_grace_period: 30s` nas apps; `init: true` é opcional, porque o handler próprio sai com 0 também como PID 1.
 
-Scripts novos: `sqs:setup` (`bun scripts/sqs-setup.ts`). Os de teste não mudam; as suítes de integração e concorrência
-passam a exigir o `localstack` do Compose no ar.
+Scripts novos: `queue:init` (`bun scripts/queue-init.ts`). Os de teste não mudam; as suítes de integração e
+concorrência passam a exigir o serviço `sqs` do Compose no ar (`docker compose up -d postgres sqs`).
 
 ### Matriz de testes
 
@@ -371,13 +397,13 @@ passam a exigir o `localstack` do Compose no ar.
 | Replay cruzado | HTTP depois fila e fila depois HTTP → 1 efeito, a segunda é replay | FR-006, I-28 |
 | FAILED | worker com erro permanente (failpoint) → FAILED em transação separada; replay HTTP → 500 `retryable` false; replay pela fila → ack | FR-029, FR-030, FR-012, I-61, I-62 |
 | Publicação | evento publicado com o envelope intacto, grupo e deduplicação; falha de envio → reagendado; marcação só depois do envio | FR-016 a FR-022 |
-| SQS fora | proxy TCP na frente do LocalStack: HTTP segue, outbox acumula; volta → tudo publicado | FR-033, SC-009 |
+| SQS fora | proxy TCP na frente do MiniStack: HTTP segue, outbox acumula; volta → tudo publicado | FR-033, SC-009 |
 | Worker | referência aplicada → PROCESSED + eventos; rejeitada → `REFERENCE_REJECTED`; nunca chega → `REFERENCE_NOT_FOUND` (limites curtos por env); mismatch; overdraw; encadeamento; não reabre depois do NOT_FOUND | FR-023 a FR-031 |
 | Replay depois da resolução | 202 antes; 200/422 depois, com o saldo da conclusão; `correlation_id` intacto | FR-039, I-67 |
 | Término (in-process) | `app.close()` com mensagens em andamento → concluídas ou devolvidas; nada perdido | FR-014, FR-015, SC-007 |
 | Concorrência (3 processos) | mesma mensagem 50× por 3 instâncias → 1 efeito; queda depois do commit e antes do ack → duplicata; 2 publicadores + queda antes da marca → todos publicados, nenhum pendente; worker em 3 instâncias → cada pendente 1 vez; **corrida worker × BET que resolve a pendente**, ×20; REFUND × ROLLBACK pendentes → ordem do I-63 | SC-001 a SC-003, SC-005, SC-008 |
 | SIGKILL no meio da carga | 3 instâncias com papéis diferentes, fila + HTTP; SIGKILL aleatório e substituição; ao final: wallet == ledger em todas, todo evento confirmado publicado (e presente na fila de eventos), nenhuma pendente sem próxima tentativa, toda mensagem processada uma vez ou na DLQ | SC-006, SC-008 |
-| SIGTERM real | instância em container Linux com mensagens em andamento; `docker kill --signal SIGTERM` → saída 0, nada perdido | FR-014, SC-007 |
+| SIGTERM real | instância em container Linux (`docker compose run`), com e sem `--init`, com mensagem em andamento; `docker kill --signal SIGTERM` → drena, saída 0 como PID 1, nada perdido; sinal repetido ignorado; `close()` que não termina → saída 1 pelo temporizador | FR-014, SC-007, R-35 |
 | Guardrails (T118) | + nenhum mock de cliente SQS em integração/concorrência; `@aws-sdk` só em `messaging/infrastructure` | constitution VII, R-33 |
 | Invariante final | `assertWalletMatchesLedger` em toda wallet tocada | SC-006 |
 
@@ -387,7 +413,9 @@ Adiada para o fim do projeto (tasks da 001). Conteúdo que o `ARCHITECTURE.md` p
 de filas e deduplicação; inbox e a ordem dos passos do consumidor; classificação de erros e atributos da DLQ; outbox com
 lease; worker de PENDING_REFERENCE (lease, ordem do I-63, antecipação, limite e teto); ordem única de lock; encerramento
 gracioso; limitações (grupo FIFO bloqueado por retry, ordem de eventos não garantida, DLQ por redrive em queda longa do
-banco, janela de deduplicação de 5 min). O `README.md`: LocalStack no Compose, `sqs:setup`, papéis por env e os novos
+banco, janela de deduplicação de 5 min; **testes contra emulador**: MiniStack 1.5.32, sem validação de fidelidade à AWS
+real em precisão de timers e na expiração da janela de deduplicação de 5 min). O `README.md`: MiniStack no Compose,
+`queue:init`, papéis por env, handler de sinal e os novos
 requisitos das suítes.
 
 ## Pendências de decisão
