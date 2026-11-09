@@ -3,6 +3,7 @@ import { OutboxMessage } from '../../outbox/domain/outbox-message.ts';
 import type { MikroOrmOutboxWriter } from '../../outbox/infrastructure/mikro-orm-outbox.writer.ts';
 import { runWithRequestContext } from '../../platform/correlation/request-context.ts';
 import type { Failpoints } from '../../platform/failpoints/failpoints.ts';
+import type { MetricsPort } from '../../platform/metrics/metrics.port.ts';
 import type { RandomSource } from '../../platform/random/random-source.port.ts';
 import { classifyDbError } from '../../platform/persistence/pg-errors.ts';
 import type { UnitOfWork } from '../../platform/persistence/unit-of-work.ts';
@@ -41,6 +42,8 @@ export interface ResolvePendingReferenceDeps {
   policy: PendingReferencePolicy;
   random: RandomSource;
   failpoints: Failpoints;
+  /** FR-036: FAILED em `transactions_total`, falhas transitórias em `retries_total` e latência por reavaliação. */
+  metrics: MetricsPort;
   clock: Clock;
   logger: ResolvePendingLogger;
   batchSize: number;
@@ -105,6 +108,17 @@ export class ResolvePendingReferenceUseCase {
   }
 
   private async evaluate(pending: PendingClaim): Promise<EvaluationOutcome> {
+    const startedAt = this.deps.clock.now().getTime();
+    const outcome = await this.evaluateWithRetry(pending);
+    if (outcome !== 'skipped' && outcome !== 'deferred') {
+      this.deps.metrics.observe('processing_latency_ms', Math.max(0, this.deps.clock.now().getTime() - startedAt), {
+        worker: 'pending_worker',
+      });
+    }
+    return outcome;
+  }
+
+  private async evaluateWithRetry(pending: PendingClaim): Promise<EvaluationOutcome> {
     for (let attempt = 0; ; attempt++) {
       try {
         return await this.deps.unitOfWork.run((em) => this.evaluateUnderLock(em, pending));
@@ -116,6 +130,7 @@ export class ResolvePendingReferenceUseCase {
         }
         if (isTransient(error)) {
           const lockConflict = rootCode(error) === '55P03';
+          this.deps.metrics.increment('retries_total', { worker: 'pending_worker' });
           this.deps.logger.warn('pending_worker.attempt_failed', {
             transactionId: pending.id,
             walletId: pending.walletId,
@@ -212,6 +227,7 @@ export class ResolvePendingReferenceUseCase {
         transaction.fail(FailureCode.InternalError, this.deps.clock.now());
         return this.deps.transactions.markFailed(em, transaction);
       });
+      if (marked) this.deps.metrics.increment('transactions_total', { status: 'FAILED' });
       this.deps.logger.error('pending_worker.failed', {
         transactionId: pending.id,
         walletId: pending.walletId,

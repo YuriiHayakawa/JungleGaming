@@ -88,6 +88,7 @@ export class PublishOutboxUseCase {
       });
     } catch (error) {
       message.scheduleRetry(clock.now(), this.deps.backoff);
+      this.deps.metrics.increment('retries_total', { worker: 'publisher' });
       logger.warn('publisher.send_failed', {
         eventId: message.id,
         eventType: message.eventType,

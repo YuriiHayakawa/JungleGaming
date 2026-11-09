@@ -4,6 +4,8 @@ import { describe, expect, test } from 'bun:test';
 import { ConsumeWagerMessageUseCase } from '../../src/messaging/application/consume-wager-message.use-case.ts';
 import { FakeSqs } from '../support/fake-sqs.ts';
 import { EnvFailpoints } from '../../src/platform/failpoints/failpoints.ts';
+import { InMemoryMetrics } from '../../src/platform/metrics/in-memory-metrics.ts';
+import { FixedClock } from '../support/fakes.ts';
 
 const QUEUES = { transactions: 'tx.fifo', dlq: 'dlq.fifo' };
 const CONSUMER = {
@@ -17,6 +19,7 @@ const CONSUMER = {
 
 function setup() {
   const sqs = new FakeSqs();
+  const metrics = new InMemoryMetrics();
   const logs: Array<{ msg: string; fields?: Record<string, unknown> }> = [];
   const useCase = new ConsumeWagerMessageUseCase({
     // Dependências de banco não são usadas por mensagens recusadas no envelope.
@@ -31,8 +34,10 @@ function setup() {
       info: (msg, fields) => void logs.push({ msg, fields }),
       warn: (msg) => void logs.push({ msg: String(msg) }),
     },
+    metrics,
+    clock: new FixedClock(),
   });
-  return { sqs, useCase, logs };
+  return { sqs, useCase, logs, metrics };
 }
 
 const MALFORMED = 'not json';

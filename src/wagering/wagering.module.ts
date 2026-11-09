@@ -4,6 +4,7 @@ import { MikroOrmInboxRepository } from '../inbox/infrastructure/mikro-orm-inbox
 import { MikroOrmOutboxWriter } from '../outbox/infrastructure/mikro-orm-outbox.writer.ts';
 import { APP_CONFIG, type AppConfig } from '../platform/config/app-config.ts';
 import { FAILPOINTS, type Failpoints } from '../platform/failpoints/failpoints.ts';
+import { METRICS, type MetricsPort } from '../platform/metrics/metrics.port.ts';
 import { LOGGER, type JsonLogger } from '../platform/logging/json-logger.ts';
 import { ORM } from '../platform/persistence/orm.provider.ts';
 import { UNIT_OF_WORK, type UnitOfWork } from '../platform/persistence/unit-of-work.ts';
@@ -35,19 +36,20 @@ const TRANSACTION_RECORDER = Symbol('TRANSACTION_RECORDER');
   providers: [
     {
       provide: TRANSACTION_RECORDER,
-      inject: [APP_CONFIG, ID_GENERATOR],
-      useFactory: (config: AppConfig, ids: IdGenerator) =>
+      inject: [APP_CONFIG, ID_GENERATOR, METRICS],
+      useFactory: (config: AppConfig, ids: IdGenerator, metrics: MetricsPort) =>
         new TransactionRecorder({
           wallets: new MikroOrmWalletRepository(),
           transactions: new MikroOrmWagerTransactionRepository(),
           ledger: new MikroOrmLedgerRepository(),
           ids,
+          metrics,
           firstReferenceAttemptDelayMs: config.pendingWorker.backoffBaseMs,
         }),
     },
     {
       provide: SUBMIT_WAGER_TRANSACTION_USE_CASE,
-      inject: [ORM, UNIT_OF_WORK, TRANSACTION_RECORDER, FAILPOINTS, CLOCK, ID_GENERATOR, LOGGER],
+      inject: [ORM, UNIT_OF_WORK, TRANSACTION_RECORDER, FAILPOINTS, CLOCK, ID_GENERATOR, LOGGER, METRICS],
       useFactory: (
         orm: MikroORM,
         unitOfWork: UnitOfWork<EntityManager>,
@@ -56,6 +58,7 @@ const TRANSACTION_RECORDER = Symbol('TRANSACTION_RECORDER');
         clock: Clock,
         ids: IdGenerator,
         logger: JsonLogger,
+        metrics: MetricsPort,
       ) =>
         new SubmitWagerTransactionUseCase({
           orm,
@@ -66,6 +69,7 @@ const TRANSACTION_RECORDER = Symbol('TRANSACTION_RECORDER');
           recorder,
           inbox: new MikroOrmInboxRepository(),
           failpoints,
+          metrics,
           clock,
           ids,
           logger,
@@ -78,7 +82,7 @@ const TRANSACTION_RECORDER = Symbol('TRANSACTION_RECORDER');
     },
     {
       provide: RESOLVE_PENDING_REFERENCE_USE_CASE,
-      inject: [APP_CONFIG, ORM, UNIT_OF_WORK, TRANSACTION_RECORDER, RANDOM_SOURCE, FAILPOINTS, CLOCK, LOGGER],
+      inject: [APP_CONFIG, ORM, UNIT_OF_WORK, TRANSACTION_RECORDER, RANDOM_SOURCE, FAILPOINTS, CLOCK, LOGGER, METRICS],
       useFactory: (
         config: AppConfig,
         orm: MikroORM,
@@ -88,6 +92,7 @@ const TRANSACTION_RECORDER = Symbol('TRANSACTION_RECORDER');
         failpoints: Failpoints,
         clock: Clock,
         logger: JsonLogger,
+        metrics: MetricsPort,
       ) => {
         const { pendingWorker } = config;
         return new ResolvePendingReferenceUseCase({
@@ -106,6 +111,7 @@ const TRANSACTION_RECORDER = Symbol('TRANSACTION_RECORDER');
           }),
           random,
           failpoints,
+          metrics,
           clock,
           logger,
           batchSize: pendingWorker.batchSize,

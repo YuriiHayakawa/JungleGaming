@@ -1,6 +1,7 @@
 import { IsolationLevel } from '@mikro-orm/core';
 import { ServiceUnavailableError } from '../../shared-kernel/application/errors.ts';
-import { classifyDbError } from './pg-errors.ts';
+import type { MetricsPort } from '../metrics/metrics.port.ts';
+import { classifyDbError, sqlStateOf } from './pg-errors.ts';
 
 export const UNIT_OF_WORK = Symbol('UNIT_OF_WORK');
 
@@ -20,12 +21,14 @@ const MAX_RETRIES = 2;
  * - passa ao trabalho o EntityManager DA TRANSAÇÃO: toda query do trabalho deve usá-lo;
  * - repete o trabalho inteiro até 2 vezes em deadlock (40P01) ou falha de serialização (40001);
  * - converte falha transitória em ServiceUnavailableError, sempre depois do rollback;
- * - qualquer outro erro (23505, invariante, negócio) é propagado sem repetição para o use case decidir.
+ * - qualquer outro erro (23505, invariante, negócio) é propagado sem repetição para o use case decidir;
+ * - espera pelo lock esgotada (55P03) conta em `lock_conflicts_total` (FR-036), quando há porta de métricas.
  */
 export class UnitOfWork<Tx extends { execute(sql: string): Promise<unknown> }> {
   constructor(
     private readonly root: TransactionalRoot<Tx>,
     private readonly lockTimeoutMs: number,
+    private readonly metrics?: Pick<MetricsPort, 'increment'>,
   ) {
     if (!Number.isSafeInteger(lockTimeoutMs) || lockTimeoutMs < 1) {
       throw new Error(`lock timeout must be a positive integer, got ${lockTimeoutMs}`);
@@ -45,6 +48,7 @@ export class UnitOfWork<Tx extends { execute(sql: string): Promise<unknown> }> {
         );
       } catch (error) {
         const kind = classifyDbError(error);
+        if (sqlStateOf(error) === '55P03') this.metrics?.increment('lock_conflicts_total');
         if (kind === 'retry' && attempt < MAX_RETRIES) continue;
         if (kind === 'retry' || kind === 'transient') throw new ServiceUnavailableError({ cause: error });
         throw error;

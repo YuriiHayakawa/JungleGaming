@@ -9,6 +9,8 @@ import {
   type RequestContext,
 } from '../../platform/correlation/request-context.ts';
 import type { Failpoints } from '../../platform/failpoints/failpoints.ts';
+import type { MetricsPort } from '../../platform/metrics/metrics.port.ts';
+import type { Clock } from '../../shared-kernel/domain/clock.port.ts';
 import { computePayloadHash } from '../../wagering/application/payload-hash.ts';
 import type { SubmitWagerTransactionUseCase } from '../../wagering/application/submit-wager-transaction.use-case.ts';
 import type { MessageAction, MessageHandler } from './message-batch.ts';
@@ -30,6 +32,9 @@ export interface ConsumeWagerMessageDeps {
   consumer: ConsumerConfig;
   failpoints: Failpoints;
   logger: ConsumerLogger;
+  /** FR-036: duplicatas pela inbox, retries, DLQ e latência de processamento por mensagem. */
+  metrics: MetricsPort;
+  clock: Clock;
 }
 
 /**
@@ -46,9 +51,13 @@ export interface ConsumeWagerMessageDeps {
  * DeleteMessage (FR-040). O consumidor nunca grava FAILED (FR-011, I-61).
  */
 export class ConsumeWagerMessageUseCase implements MessageHandler {
+  /** Início do processamento de cada mensagem, para `processing_latency_ms{worker="consumer"}` no fim do `apply`. */
+  private readonly startedAt = new WeakMap<SqsMessage, number>();
+
   constructor(private readonly deps: ConsumeWagerMessageDeps) {}
 
   async process(message: SqsMessage): Promise<MessageAction> {
+    this.startedAt.set(message, this.deps.clock.now().getTime());
     let envelope;
     try {
       envelope = parseWagerMessage(message.body);
@@ -76,6 +85,7 @@ export class ConsumeWagerMessageUseCase implements MessageHandler {
         if (stored) {
           if (!stored.matchesPayload(computePayloadHash(input))) throw new InboxPayloadMismatchError(messageId);
           setRequestContextValues({ transactionId: stored.transactionId });
+          this.deps.metrics.increment('duplicates_total', { source: 'inbox' });
           return { type: 'ack', outcome: 'duplicate', committed: false, context: store };
         }
 
@@ -101,6 +111,20 @@ export class ConsumeWagerMessageUseCase implements MessageHandler {
   }
 
   async apply(message: SqsMessage, action: MessageAction): Promise<void> {
+    try {
+      await this.applyAction(message, action);
+    } finally {
+      const startedAt = this.startedAt.get(message);
+      this.startedAt.delete(message);
+      if (startedAt !== undefined) {
+        this.deps.metrics.observe('processing_latency_ms', Math.max(0, this.deps.clock.now().getTime() - startedAt), {
+          worker: 'consumer',
+        });
+      }
+    }
+  }
+
+  private async applyAction(message: SqsMessage, action: MessageAction): Promise<void> {
     const context = action.context ?? { correlationId: message.sqsMessageId };
     await runWithRequestContext(context, async () => {
       switch (action.type) {
@@ -117,6 +141,7 @@ export class ConsumeWagerMessageUseCase implements MessageHandler {
         }
         case 'retry': {
           await this.deps.sqs.changeVisibility(this.deps.queues.transactions, message.receiptHandle, action.visibilitySeconds);
+          this.deps.metrics.increment('retries_total', { worker: 'consumer' });
           this.deps.logger.info('consumer.message', {
             outcome: 'error',
             errorClass: action.errorClass,
@@ -141,6 +166,7 @@ export class ConsumeWagerMessageUseCase implements MessageHandler {
             },
           });
           await this.deps.sqs.delete(this.deps.queues.transactions, message.receiptHandle);
+          this.deps.metrics.increment('dlq_total', { errorCode: action.errorCode, errorClass: action.errorClass });
           this.deps.logger.info('consumer.message', {
             outcome: 'dlq',
             errorCode: action.errorCode,

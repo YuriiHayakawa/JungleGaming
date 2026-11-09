@@ -3,6 +3,8 @@ import type { MikroORM } from '@mikro-orm/postgresql';
 import { MikroOrmInboxRepository } from '../inbox/infrastructure/mikro-orm-inbox.repository.ts';
 import { APP_CONFIG, type AppConfig } from '../platform/config/app-config.ts';
 import { FAILPOINTS, type Failpoints } from '../platform/failpoints/failpoints.ts';
+import { METRICS, type MetricsPort } from '../platform/metrics/metrics.port.ts';
+import { CLOCK, type Clock } from '../shared-kernel/domain/clock.port.ts';
 import { LOGGER, type JsonLogger } from '../platform/logging/json-logger.ts';
 import { ORM } from '../platform/persistence/orm.provider.ts';
 import type { SubmitWagerTransactionUseCase } from '../wagering/application/submit-wager-transaction.use-case.ts';
@@ -30,7 +32,7 @@ import { CONSUME_WAGER_MESSAGE_USE_CASE, WagerTransactionsConsumer } from './int
     },
     {
       provide: CONSUME_WAGER_MESSAGE_USE_CASE,
-      inject: [APP_CONFIG, ORM, SUBMIT_WAGER_TRANSACTION_USE_CASE, SQS_PORT, FAILPOINTS, LOGGER],
+      inject: [APP_CONFIG, ORM, SUBMIT_WAGER_TRANSACTION_USE_CASE, SQS_PORT, FAILPOINTS, LOGGER, METRICS, CLOCK],
       useFactory: (
         config: AppConfig,
         orm: MikroORM,
@@ -38,6 +40,8 @@ import { CONSUME_WAGER_MESSAGE_USE_CASE, WagerTransactionsConsumer } from './int
         sqs: SqsPort,
         failpoints: Failpoints,
         logger: JsonLogger,
+        metrics: MetricsPort,
+        clock: Clock,
       ) =>
         new ConsumeWagerMessageUseCase({
           orm,
@@ -48,6 +52,8 @@ import { CONSUME_WAGER_MESSAGE_USE_CASE, WagerTransactionsConsumer } from './int
           consumer: config.consumer,
           failpoints,
           logger,
+          metrics,
+          clock,
         }),
     },
     WagerTransactionsConsumer,

@@ -5,6 +5,7 @@ import { InboxMessage, InboxPayloadMismatchError } from '../../inbox/domain/inbo
 import type { MikroOrmInboxRepository } from '../../inbox/infrastructure/mikro-orm-inbox.repository.ts';
 import { currentRequestContext, setRequestContextValues } from '../../platform/correlation/request-context.ts';
 import type { Failpoints } from '../../platform/failpoints/failpoints.ts';
+import type { MetricsPort } from '../../platform/metrics/metrics.port.ts';
 import { classifyDbError } from '../../platform/persistence/pg-errors.ts';
 import type { UnitOfWork } from '../../platform/persistence/unit-of-work.ts';
 import {
@@ -95,6 +96,7 @@ export interface SubmitWagerTransactionDeps {
   recorder: TransactionRecorder;
   inbox: MikroOrmInboxRepository;
   failpoints: Failpoints;
+  metrics: Pick<MetricsPort, 'increment'>;
   clock: Clock;
   ids: IdGenerator;
   logger: UseCaseLogger;
@@ -131,6 +133,14 @@ export class SubmitWagerTransactionUseCase {
    * no mesmo commit do efeito ou do replay; conflito de idempotência e wallet inexistente não gravam inbox (I-68).
    */
   async submit(command: SubmitWagerTransactionCommand): Promise<SubmissionOutcome> {
+    const outcome = await this.submitOnce(command);
+    // FR-036: duplicata reconhecida pela idempotência (replay, HTTP ou fila) ou pela inbox (mesma mensagem).
+    if (outcome.effect === 'replay') this.deps.metrics.increment('duplicates_total', { source: 'idempotency' });
+    if (outcome.effect === 'duplicate') this.deps.metrics.increment('duplicates_total', { source: 'inbox' });
+    return outcome;
+  }
+
+  private async submitOnce(command: SubmitWagerTransactionCommand): Promise<SubmissionOutcome> {
     const { input } = command;
     const request: AcceptedRequest = {
       command,

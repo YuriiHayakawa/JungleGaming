@@ -198,3 +198,30 @@ Diff revisado: `test/integration/dependency-outage.test.ts` e `test/unit/polling
 | Ack só depois do commit | OK | T080: com o banco fora, nenhuma mensagem sai da fila (visíveis + invisíveis = 2) e nenhuma linha de inbox é gravada. |
 | DLQ antes de apagar | OK | T080: DLQ vazia durante e depois da queda (falha de infraestrutura própria nunca manda à DLQ). |
 | Publisher marca só depois do SendMessage | OK | T080: com o SQS fora, a outbox acumula sem `published_at`; com o SQS de volta, tudo é publicado. |
+
+## US7
+
+| # | Decisão | Motivo | Task |
+|---|---------|--------|------|
+| N-41 | Pontos de registro, todos pela porta `METRICS` (R-32): `transactions_total{status}` no `TransactionRecorder` (submit pelo HTTP e pela fila, e worker) e no FAILED do worker; `duplicates_total{source="idempotency"}` em todo replay pela idempotência (HTTP ou fila) e `{source="inbox"}` na duplicata da inbox (caminho rápido do consumidor ou releitura no submit); `retries_total{worker}` no `retry` do consumidor, na falha de envio do publicador e na falha transitória de uma reavaliação do worker; `dlq_total{errorCode, errorClass}` depois do envio aceito à DLQ e do delete; `lock_conflicts_total` na unit of work ao ver `55P03`; `outbox_lag_ms` na marca do publicador (US3); `processing_latency_ms{worker}` por mensagem no consumidor (do `process` ao fim do `apply`) e por reavaliação no worker (sem contar `skipped` e `deferred`). | FR-036 e o T083. O `{errorClass}` no `dlq_total` atende a "com a classe do erro" do cenário 2 da US7, junto com o `errorCode` do T082. | T083 |
+| N-42 | `transactions_total` conta ao gravar, dentro da transação: uma tentativa da unit of work que sofre rollback depois (deadlock, falha de serialização, failpoint) também é contada. A abertura de wallet (OPENING) não entra no contador. | O R-32 define as métricas como observação, sem garantia; contar depois do commit exigiria levar o resultado até cada chamador. OPENING não é transação de aposta: entra com a wallet, por outro módulo. | T083 |
+| N-43 | A latência usa a porta `Clock` (`clock.now()`), não `performance.now()`. | Tempo só pela porta em `application` (constitution VI, guardrail (e)). A resolução é de milissegundos, suficiente para a observação. | T083 |
+| N-44 | Os rótulos são só `status`, `source`, `worker`, `errorCode` e `errorClass`; o T082 confere que nenhum rótulo tem formato de número (valor monetário). | FR-037. | T082 |
+
+### Revisão da US7 contra o review-checklist.md
+
+Diff revisado: porta `METRICS` no consumidor, no submit, no recorder, no worker, no publicador e na unit of work (`sqlStateOf` em `pg-errors.ts`), e a ligação nos módulos.
+
+| Item | Resultado | Evidência |
+|------|-----------|-----------|
+| Dinheiro sem `number` | OK | Nenhum valor monetário passa pela porta; rótulos só de status, origem, trabalhador e código de erro (T082 confere que nenhum rótulo tem formato numérico). |
+| Saldo só sob lock | N/A | A instrumentação não escreve saldo nem status; o contador do recorder roda dentro da mesma transação, sem I/O. |
+| Unicidade no banco | N/A | Sem unicidade nova. |
+| Outbox na mesma transação | N/A | Sem gravação nova. |
+| Triggers presentes | N/A | Sem migration. |
+| Sem mock em integração e concorrência | OK | T082 lê o `InMemoryMetrics` real da instância (o adaptador de produção da porta), com PostgreSQL e MiniStack reais; o lock esgotado é um `FOR UPDATE` real. |
+| Sem relógio nem id no domínio | OK | Latências por `clock.now()`; varredura do diff sem `Date.now(`, `new Date()`, `performance.now` ou `Math.random`. |
+| Ordem de lock wallet primeiro | N/A | Sem lock novo. |
+| Ack só depois do commit | OK | O `dlq_total` e o `retries_total` são registrados depois das chamadas ao SQS, dentro do `apply`; a ordem ack/DLQ não mudou. |
+| DLQ antes de apagar | OK | `dlq_total` só depois do `send` à DLQ e do `delete`. |
+| Publisher marca só depois do SendMessage | OK | Só um `retries_total` no ramo de falha de envio; a marca não mudou. |

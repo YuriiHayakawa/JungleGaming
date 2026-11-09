@@ -41,6 +41,12 @@ function fields(err: unknown): { code?: string; constraint?: string; message: st
   };
 }
 
+/** SQLSTATE do erro do driver (no próprio erro ou em `cause`), se houver. */
+export function sqlStateOf(err: unknown): string | undefined {
+  if (err === null || typeof err !== 'object') return undefined;
+  return fields(err).code;
+}
+
 export function classifyDbError(err: unknown): DbErrorKind {
   if (err === null || typeof err !== 'object') return 'unknown';
   const { code, constraint, message } = fields(err);

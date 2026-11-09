@@ -1,4 +1,5 @@
 import type { EntityManager } from '@mikro-orm/postgresql';
+import type { MetricsPort } from '../../platform/metrics/metrics.port.ts';
 import type { IdGenerator } from '../../shared-kernel/domain/id-generator.port.ts';
 import type { EventContext, IntegrationEvent } from '../../shared-kernel/domain/integration-event.ts';
 import { WalletBalanceChanged } from '../../wallets/domain/events/wallet-balance-changed.event.ts';
@@ -41,6 +42,8 @@ export interface TransactionRecorderDeps {
   transactions: MikroOrmWagerTransactionRepository;
   ledger: MikroOrmLedgerRepository;
   ids: IdGenerator;
+  /** `transactions_total{status}` a cada transação gravada (FR-036); rótulo sem valor monetário (FR-037). */
+  metrics: Pick<MetricsPort, 'increment'>;
   /** Espera até a 1ª tentativa do worker, contada de `created_at` (I-21: a base do backoff, PENDING_BACKOFF_BASE_MS). */
   firstReferenceAttemptDelayMs: number;
 }
@@ -111,6 +114,7 @@ export class TransactionRecorder {
         const nextAttemptAt = new Date(transaction.createdAt.getTime() + this.deps.firstReferenceAttemptDelayMs);
         transaction.markPendingReference(wallet.balance, nextAttemptAt, at.now);
         await this.persist(em, transaction, mode);
+        this.deps.metrics.increment('transactions_total', { status: transaction.status });
         return [WagerTransactionPendingReference.from(transaction, context())];
       }
     }
@@ -118,6 +122,9 @@ export class TransactionRecorder {
     if (transaction.status === WagerTransactionStatus.Processed || transaction.status === WagerTransactionStatus.Rejected) {
       await this.deps.transactions.anticipateDependents(em, transaction.providerId, transaction.externalTransactionId, at.now);
     }
+    // Contado ao gravar: uma tentativa que sofre rollback depois (unit of work, R-12) também é contada. Observação, não
+    // garantia (R-32).
+    this.deps.metrics.increment('transactions_total', { status: transaction.status });
     return events;
   }
 

@@ -565,7 +565,7 @@ test/integration/sqs-outage.test.ts`
 
 ### Testes da User Story 7 (escrever primeiro; devem falhar)
 
-- [ ] T082 [P] [US7] Escrever `test/integration/metrics.test.ts` (US7 cenários 1 a 3; FR-036; constitution VIII), lendo
+- [X] T082 [P] [US7] Escrever `test/integration/metrics.test.ts` (US7 cenários 1 a 3; FR-036; constitution VIII), lendo
   `app.get(METRICS).snapshot()`: duplicata pela inbox e pela idempotência → `duplicates_total{source}`; transitório →
   `retries_total{worker="consumer"}`; permanente → `dlq_total{errorCode}`; lock esgotado → `lock_conflicts_total`;
   publicação → `outbox_lag_ms`; mensagem e pendente processadas → `processing_latency_ms{worker}`; transação gravada →
@@ -573,7 +573,7 @@ test/integration/sqs-outage.test.ts`
 
 ### Implementação da User Story 7
 
-- [ ] T083 [US7] Instrumentar com a porta `METRICS` o consumidor, o publicador, o worker, o
+- [X] T083 [US7] Instrumentar com a porta `METRICS` o consumidor, o publicador, o worker, o
   `src/wagering/application/transaction-recorder.ts` e o `src/platform/persistence/unit-of-work.ts` (`55P03` →
   `lock_conflicts_total`), sem valores monetários nos rótulos (FR-036, FR-037). Faz o T082 passar
 

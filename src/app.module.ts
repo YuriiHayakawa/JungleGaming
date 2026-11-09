@@ -5,7 +5,7 @@ import { APP_CONFIG, type AppConfig } from './platform/config/app-config.ts';
 import { LOGGER, type JsonLogger } from './platform/logging/json-logger.ts';
 import { EnvFailpoints, FAILPOINTS } from './platform/failpoints/failpoints.ts';
 import { InMemoryMetrics } from './platform/metrics/in-memory-metrics.ts';
-import { METRICS } from './platform/metrics/metrics.port.ts';
+import { METRICS, type MetricsPort } from './platform/metrics/metrics.port.ts';
 import { CryptoRandomSource } from './platform/random/crypto-random-source.ts';
 import { RANDOM_SOURCE, type RandomSource } from './platform/random/random-source.port.ts';
 import { WORKER_REGISTRY, WorkerRegistry } from './platform/workers/worker-registry.ts';
@@ -54,8 +54,8 @@ export class AppModule {
       OrmLifecycle,
       {
         provide: UNIT_OF_WORK,
-        inject: [ORM],
-        useFactory: (orm: MikroORM) => new UnitOfWork(orm.em, config.walletLockTimeoutMs),
+        inject: [ORM, METRICS],
+        useFactory: (orm: MikroORM, metrics: MetricsPort) => new UnitOfWork(orm.em, config.walletLockTimeoutMs, metrics),
       },
       { provide: PROVIDER_IDENTITY, useClass: NoopProviderIdentity },
       { provide: APP_GUARD, useClass: NoopAuthGuard },
