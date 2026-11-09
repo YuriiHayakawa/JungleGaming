@@ -13,7 +13,8 @@
     "test:unit": "bun test test/unit",
     "test:integration": "bun test --preload ./test/support/db-setup.preload.ts test/integration",
     "test:concurrency": "bun test --preload ./test/support/db-setup.preload.ts test/concurrency",
-    "test": "bun run test:unit && bun run test:integration && bun run test:concurrency"
+    "test": "bun run test:unit && bun run test:integration && bun run test:concurrency",
+    "test:chaos": "bun test --preload ./test/support/db-setup.preload.ts ./test/concurrency/sigkill-recovery.test.ts ./test/concurrency/crash-before-ack.test.ts ./test/concurrency/concurrent-publishers.test.ts ./test/concurrency/graceful-sigterm.test.ts"
   },
   "dependencies": {
     "@aws-sdk/client-sqs": "3.1156.0",
