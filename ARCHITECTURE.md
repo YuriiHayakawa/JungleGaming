@@ -99,6 +99,9 @@ flowchart LR
 `app1` roda HTTP e consumidor; a `app2`, HTTP, consumidor e publicador; e a `app3`, HTTP, publicador e worker. Todos
 os papéis podem rodar em várias instâncias ao mesmo tempo.
 
+**Fora do serviço**: `demo/` (console de demonstração com proxy local) e `load/` (teste de carga) ficam fora de `src/`.
+Não fazem parte da aplicação nem da imagem Docker, e só usam a API HTTP pública.
+
 ## 3. MikroORM
 
 **Por que MikroORM**: é a opção preferencial do enunciado e tem o que a estratégia usa: `em.fork()` (identity map
@@ -464,6 +467,28 @@ Passos do consumidor, por mensagem:
 - **Bloqueio de grupo FIFO**: na fila de entrada, uma mensagem em retry bloqueia o grupo (a wallet) até sair, por
   sucesso ou pela DLQ. É o preço da ordem por wallet.
 
+**Vazão medida no teste de carga** ([docs/load-test.md](docs/load-test.md) §3.2 e §4.4):
+
+- o publicador envia **um evento por chamada** (`SendMessage`);
+- com cerca de 412 req/s, as instâncias geraram cerca de **740 eventos/s**, e os 2 publicadores do cluster publicaram
+  só **96 a 168 eventos/s**;
+- sob carga sustentada, o backlog chegou a **19 a 24 mil eventos**, e o mais antigo esperou **até cerca de 4 min**;
+- nada se perdeu (a outbox zerou depois de cada cenário), mas o atraso cresce enquanto a carga durar.
+
+Parte do limite é o emulador: o MiniStack fica com um núcleo saturado, e a vazão cai quando a fila de eventos acumula.
+A outra parte é o desenho, porque o envio evento a evento limita cada publicador à latência de um `SendMessage`.
+
+O **próximo passo é o envio em lote** (`SendMessageBatch`, até 10 por chamada), adiado em R-34. Ele exige dois
+cuidados:
+
+- **falha parcial**: o lote responde por entrada. Só as entradas aceitas podem ser marcadas como publicadas; as que
+  falharam recebem `scheduleRetry`, como hoje;
+- **ordem por grupo FIFO**: se uma entrada de um grupo (wallet) falha e uma posterior do mesmo grupo é aceita, a ordem
+  dentro do grupo se inverte. É preciso parar o grupo na primeira falha, ou aceitar a inversão, que os consumidores já
+  tratam por `walletVersion` e `eventId` (I-32).
+
+Mais publicadores, ou envios paralelos dentro do lote, também aumentariam a vazão.
+
 ## 13. Política de retry, DLQ e PENDING_REFERENCE
 
 **HTTP**:
@@ -668,7 +693,12 @@ execuções nesta máquina:
 - 73–152 req/s com p99 acima de 1 s na wallet quente;
 - nenhum erro, 100% das duplicatas reconhecidas, nenhum `55P03`;
 - todas as wallets consistentes e o saldo esperado pelo cliente igual ao armazenado;
-- o gargalo é a publicação da outbox (§20).
+- o gargalo é a publicação da outbox (§12 e §20).
+
+**Console de demonstração** (`bun run demo`, opcional, em `demo/`): uma página com proxy local em `127.0.0.1:4000` que
+chama a API pública das 3 instâncias e mostra o cenário 100/80/80, o replay, o conflito de idempotência, o ledger, a
+reconciliação e as métricas. É ferramenta de apresentação, não teste: as garantias são provadas pela suíte. Foi
+validado clicando cada botão num navegador headless contra o cluster.
 
 **O que NÃO foi testado**:
 
@@ -759,12 +789,15 @@ Outras decisões com impacto na avaliação:
   - nada se perde, mas o atraso cresce enquanto a carga durar;
   - causas: o MiniStack (um núcleo saturado) e o envio evento a evento (`SendMessage`), pois o `SendMessageBatch` foi
     adiado (R-34);
-  - mitigações possíveis: `SendMessageBatch`, envios em paralelo dentro do lote ou mais publicadores.
+  - próximo passo: `SendMessageBatch`, com os cuidados de falha parcial e de ordem por grupo FIFO descritos no §12;
+    envios em paralelo e mais publicadores também ajudam.
 - **Wallet quente**: o lock por wallet serializa as operações. No teste de carga, uma única wallet sustentou 73–152
   req/s, sem erro e sem lock esgotado, mas com cauda longa: p50 de cerca de 23 ms e p95 perto de 1 s. A hipótese,
   não verificada, é que a fila do lock não é atendida em ordem de chegada.
 - **O teste de carga não é capacidade de produção**: cliente, instâncias, banco e emulador dividem uma máquina de
-  desktop (docs/load-test.md §4.5). Não há UI nem balanceador no Compose (os clientes escolhem a instância).
+  desktop (docs/load-test.md §4.5). Ele é opcional e fica fora de `src/` e de `bun run test`.
+- **Sem balanceador no Compose**: os clientes escolhem a instância. O console de demonstração (`demo/`) é só para
+  apresentação; não há interface de operação nem de administração.
 - **Moeda única nos fluxos**: o modelo é multi-moeda e o conflito é testado, mas os fluxos usam BRL.
 
 ## 21. Decisões de interpretação mais relevantes

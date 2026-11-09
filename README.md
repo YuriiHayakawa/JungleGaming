@@ -9,6 +9,76 @@ Stack: Bun 1.4.4, TypeScript estrito, NestJS 12, MikroORM 7, PostgreSQL 17 e Min
 As decisões técnicas, os trade-offs e as limitações estão em [ARCHITECTURE.md](ARCHITECTURE.md). As interpretações do
 enunciado (I-01 a I-76) estão em [docs/interpretacoes.md](docs/interpretacoes.md).
 
+## Início rápido
+
+Do clone ao cenário 100/80/80 (duas BETs de 80,00 numa wallet de 100,00, em instâncias diferentes) funcionando. Use
+um comando por linha: funciona no Git Bash, em shells Unix e no Windows PowerShell 5.1.
+
+```bash
+git clone https://github.com/YuriiHayakawa/JungleGaming.git
+cd JungleGaming
+cp .env.example .env
+bun install --frozen-lockfile
+docker compose --profile cluster up -d --build
+bun run demo
+```
+
+Depois abra **http://127.0.0.1:4000** e clique em **"Executar roteiro completo"**, ou nos botões um a um. Os três
+indicadores do topo ficam verdes quando as instâncias estão prontas; o primeiro build leva alguns minutos.
+
+- Exige Bun 1.4.4 e Docker com Compose v2 ([pré-requisitos](#1-pré-requisitos)).
+- Se a porta 5432 estiver ocupada, troque `POSTGRES_PORT` e as duas URLs no `.env` antes do `docker compose`
+  ([seção 3](#3-subir-o-ambiente)).
+- O console é opcional. O mesmo cenário por linha de comando está na [seção 7](#7-exemplos-de-uso-curl), e a prova
+  automatizada, repetida 20 vezes com 3 instâncias, é `test/concurrency/hot-wallet-race.test.ts`.
+
+## O que foi entregue
+
+- **Obrigatório**:
+  - API HTTP com idempotência persistente;
+  - consumo da fila SQS FIFO pelo mesmo use case, com inbox e DLQ;
+  - transactional outbox com publicadores concorrentes;
+  - worker de PENDING_REFERENCE;
+  - reconciliação, health checks, métricas Prometheus e logs JSON com correlationId;
+  - migrations reversíveis com constraints e triggers;
+  - 977 testes contra PostgreSQL e MiniStack reais.
+- **Extras opcionais**:
+  - `bun run test:load`, com teste de carga e análise em [docs/load-test.md](docs/load-test.md);
+  - `bun run test:chaos`, um conjunto focado de testes de queda;
+  - o console de demonstração, em `demo/`.
+
+**Não foi feito**:
+- autenticação: o desenho com Keycloak e os pontos de extensão estão no [ARCHITECTURE §17](ARCHITECTURE.md#17-autenticação);
+- validação contra a AWS real: tudo roda no emulador MiniStack, como explica o [ARCHITECTURE §20](ARCHITECTURE.md#20-limitações-e-trade-offs).
+
+## Guia para avaliação
+
+Onde está cada área da avaliação (enunciado §14), com a explicação no ARCHITECTURE e os testes que provam:
+
+| Área (pontos) | ARCHITECTURE | Onde está provado |
+|---|---|---|
+| Correção financeira (20) | [§4 Money](ARCHITECTURE.md#4-mapeamento-do-money), [§5 transação](ARCHITECTURE.md#5-estratégia-transacional), [§9 schema](ARCHITECTURE.md#9-schema), [§15 reconciliação](ARCHITECTURE.md#15-reconciliação-health-e-métricas) | `test/unit/money.test.ts`, `test/unit/wallet.test.ts`, `test/unit/wager-rules.test.ts`, `test/integration/reversals.test.ts`, `test/integration/schema-guards.test.ts`, `test/integration/reconciliation.test.ts`, `test/integration/reconciliation-divergence.test.ts` |
+| Concorrência (20) | [§6](ARCHITECTURE.md#6-estratégia-de-concorrência) | `test/concurrency/hot-wallet-race.test.ts`, `test/concurrency/wallet-isolation.test.ts`, `test/concurrency/reversal-race.test.ts`, `test/concurrency/pool-pressure.test.ts`, `test/concurrency/lock-timeout.test.ts`, `test/concurrency/concurrent-wallet-creation.test.ts`, `test/integration/deadlock.test.ts` |
+| Idempotência (15) | [§7](ARCHITECTURE.md#7-idempotência) | `test/unit/payload-hash.test.ts`, `test/integration/idempotency.test.ts`, `test/integration/cross-channel-replay.test.ts`, `test/concurrency/idempotent-burst.test.ts`, `test/concurrency/idempotency-race.test.ts`, `test/concurrency/message-burst.test.ts` |
+| Mensageria e falhas (15) | [§11](ARCHITECTURE.md#11-mensageria-consumidor) a [§14](ARCHITECTURE.md#14-encerramento-gracioso) | `test/integration/consumer-processing.test.ts`, `test/integration/consumer-permanent-errors.test.ts`, `test/integration/consumer-transient-errors.test.ts`, `test/integration/consumer-unexpected-errors.test.ts`, `test/integration/outbox-publisher.test.ts`, `test/integration/pending-reference-worker.test.ts`, `test/integration/dependency-outage.test.ts`, `test/concurrency/crash-before-ack.test.ts`, `test/concurrency/concurrent-publishers.test.ts`, `test/concurrency/sigkill-recovery.test.ts`, `test/concurrency/graceful-sigterm.test.ts` |
+| Modelagem e arquitetura (10) | [§2](ARCHITECTURE.md#2-mapa-de-módulos-e-dependências), [§3](ARCHITECTURE.md#3-mikroorm), [§8](ARCHITECTURE.md#8-máquina-de-estados) | `test/unit/wallet.test.ts`, `test/unit/wager-transaction.test.ts`, `test/unit/wallet-ledger-entry.test.ts`, `test/unit/integration-event.test.ts`, e `test/unit/conventions.test.ts` (domínio sem ORM nem Nest; relógio, ids e aleatoriedade só por porta) |
+| Testes (10) | [§18](ARCHITECTURE.md#18-testes) | [seção 13](#13-cobertura-do-enunciado-13) (cada cenário obrigatório do §13 → arquivo), `test/support/assert-wallet-matches-ledger.ts`, `test/unit/conventions.test.ts` |
+| Observabilidade (5) | [§15](ARCHITECTURE.md#15-reconciliação-health-e-métricas), [§16](ARCHITECTURE.md#16-observabilidade) | `test/integration/metrics.test.ts`, `test/integration/metrics-endpoint.test.ts`, `test/integration/health.test.ts`, `test/integration/health-shutdown.test.ts`, `test/integration/correlation-id.test.ts`, `test/unit/json-logger.test.ts` |
+| Documentação (5) | todo o documento, com [§20 limitações](ARCHITECTURE.md#20-limitações-e-trade-offs) | este README, [ARCHITECTURE.md](ARCHITECTURE.md), [docs/interpretacoes.md](docs/interpretacoes.md), [docs/load-test.md](docs/load-test.md) |
+
+As 8 falhas eliminatórias do enunciado, cada uma com o mecanismo que a evita e o teste que prova:
+
+| Falha eliminatória | Mecanismo | Prova |
+|---|---|---|
+| `number` para dinheiro | `Money` sobre `decimal.js`; `NUMERIC(18,2)` lido como string com `DecimalType('string')` ([§4](ARCHITECTURE.md#4-mapeamento-do-money)); o guardrail (c) proíbe `parseFloat`/`Number(` em dinheiro em `src/` | `test/unit/money.test.ts`, `test/integration/money-columns.test.ts`, `test/unit/conventions.test.ts` |
+| Saldo negativo causado por race | `SELECT … FOR UPDATE` na wallet, regra de domínio sob o lock e `CHECK (balance >= 0)` ([§6](ARCHITECTURE.md#6-estratégia-de-concorrência)) | `test/concurrency/hot-wallet-race.test.ts` (20 repetições, 3 instâncias), `test/concurrency/pool-pressure.test.ts`, `test/integration/schema-guards.test.ts` |
+| Débito ou crédito duplicado | `UNIQUE(provider_id, idempotency_key)`, `UNIQUE(provider_id, external_transaction_id)`, PK da inbox, `UNIQUE(wallet_id, transaction_id)` no ledger e índice de reversão única ([§7](ARCHITECTURE.md#7-idempotência), [§9](ARCHITECTURE.md#9-schema)) | `test/concurrency/idempotent-burst.test.ts`, `test/concurrency/message-burst.test.ts`, `test/concurrency/idempotency-race.test.ts`, `test/concurrency/reversal-race.test.ts`, `test/concurrency/crash-before-ack.test.ts` |
+| Idempotência apenas em memória | toda decisão é relida no PostgreSQL (consulta única e releitura sob lock); nenhum cache decide nada | `test/concurrency/crash-recovery.test.ts` (replay em outra instância depois da queda), `test/integration/cross-channel-replay.test.ts`, `test/concurrency/idempotency-race.test.ts` |
+| Solução correta somente com uma instância | todo estado de decisão no banco; lock por wallet; claims com `SKIP LOCKED` | os testes de `test/concurrency/` sobem processos reais da app. 10 arquivos usam 3 instâncias com `startCluster({ size: 3 })` (`test/support/instance-cluster.ts`), entre eles `test/concurrency/hot-wallet-race.test.ts` e `test/concurrency/idempotent-burst.test.ts`. Outros sobem 3 instâncias com papéis: `test/concurrency/pending-worker-instances.test.ts`, `test/concurrency/pending-order.test.ts`, `test/concurrency/pending-resolution-race.test.ts` e `test/concurrency/concurrent-publishers.test.ts` |
+| Publicação de evento antes do commit | transactional outbox na mesma transação; o publicador só lê linhas confirmadas ([§12](ARCHITECTURE.md#12-outbox)) | `test/integration/atomicity.test.ts`, `test/integration/consumer-atomicity.test.ts`, `test/concurrency/concurrent-publishers.test.ts` |
+| Ausência de ledger auditável | `wallet_ledger_entries` encadeado, com triggers que recusam `UPDATE`, `DELETE` e `TRUNCATE`, e consulta paginada ([§9](ARCHITECTURE.md#9-schema)) | `test/integration/schema-guards.test.ts`, `test/integration/ledger-pagination.test.ts`, `test/support/assert-wallet-matches-ledger.ts` |
+| Testes que trocam PostgreSQL e SQS por mocks | integração e concorrência contra PostgreSQL e MiniStack reais; quedas simuladas com proxies TCP reais; guardrails (b) e (f) | `test/unit/conventions.test.ts` |
+
 ## Sumário
 
 1. [Pré-requisitos](#1-pré-requisitos)
@@ -19,10 +89,11 @@ enunciado (I-01 a I-76) estão em [docs/interpretacoes.md](docs/interpretacoes.m
 6. [Scripts](#6-scripts)
 7. [Exemplos de uso (curl)](#7-exemplos-de-uso-curl)
 8. [Filas SQS e como inspecioná-las](#8-filas-sqs-e-como-inspecioná-las)
-9. [Troubleshooting](#9-troubleshooting)
-10. [Estrutura de pastas](#10-estrutura-de-pastas)
-11. [Cobertura do enunciado §13](#11-cobertura-do-enunciado-13)
-12. [Console de demonstração](#12-console-de-demonstração)
+9. [Console de demonstração](#9-console-de-demonstração)
+10. [Teste de carga](#10-teste-de-carga)
+11. [Troubleshooting](#11-troubleshooting)
+12. [Estrutura de pastas](#12-estrutura-de-pastas)
+13. [Cobertura do enunciado §13](#13-cobertura-do-enunciado-13)
 
 ## 1. Pré-requisitos
 
@@ -33,8 +104,15 @@ enunciado (I-01 a I-76) estão em [docs/interpretacoes.md](docs/interpretacoes.m
 | Docker Compose | plugin v2 ou superior (validado com **v5.1.4**) | o arquivo usa `name:` no topo, `profiles` e `depends_on` com `service_completed_successfully` |
 | curl | qualquer | exemplos deste README; nenhum outro cliente é necessário (nem `aws` CLI nem `jq`) |
 
-Portas usadas no host: **5432** (PostgreSQL, configurável por `POSTGRES_PORT`), **4566** (MiniStack) e **3001 a 3003**
-(instâncias da app).
+Portas usadas no host:
+- **5432**: PostgreSQL, configurável por `POSTGRES_PORT`;
+- **4566**: MiniStack;
+- **3001 a 3003**: instâncias da app;
+- **4000**: console de demonstração, só em localhost.
+
+**Windows**: no PowerShell 5.1, `curl` é um alias de `Invoke-WebRequest`. Use `curl.exe`, ou o console de
+demonstração, ou o Git Bash. Os exemplos com `$W`, `'…'` e `\` deste README seguem a sintaxe de shells Unix: rode no
+Git Bash. O PowerShell 5.1 também não aceita `&&`; por isso os comandos aparecem um por linha.
 
 ## 2. Setup
 
@@ -55,7 +133,8 @@ Portas usadas no host: **5432** (PostgreSQL, configurável por `POSTGRES_PORT`),
 4. Suba o ambiente, como explicado na próxima seção. O Compose constrói a imagem, aplica as migrations e cria as filas.
 5. Rode a suíte:
    ```bash
-   bun run typecheck && bun run test
+   bun run typecheck
+   bun run test
    ```
 
 ## 3. Subir o ambiente
@@ -84,7 +163,7 @@ Ordem de subida:
 2. `sqs` (MiniStack, com healthcheck) e, em seguida, `queue-init`, que cria as filas de forma idempotente e termina.
 3. As apps, que só sobem depois que os dois serviços acima terminam com código 0.
 
-As apps não têm healthcheck no Compose. Para esperar que fiquem prontas:
+As apps não têm healthcheck no Compose. Para esperar que fiquem prontas (Git Bash):
 
 ```bash
 for p in 3001 3002 3003; do until curl -sf localhost:$p/health/ready > /dev/null; do sleep 1; done; echo "$p pronta"; done
@@ -100,8 +179,6 @@ DATABASE_URL=postgresql://junglegaming:junglegaming@localhost:55432/junglegaming
 TEST_DATABASE_ADMIN_URL=postgresql://junglegaming:junglegaming@localhost:55432/postgres
 ```
 
-Também dá para passar a porta só no comando: `POSTGRES_PORT=55432 docker compose up -d`.
-
 **Para os testes** basta subir o banco e o emulador. Os testes criam bancos e filas próprios por arquivo:
 
 ```bash
@@ -110,8 +187,14 @@ docker compose up -d postgres sqs
 
 **Derrubar**: `docker compose --profile cluster down` mantém os volumes; com `-v`, apaga também os dados.
 
-**Rodar fora do Compose**: com `postgres` e `sqs` no ar, rode `bun run migrate:up && bun run queue:init && bun run dev`.
-O `dev` usa o `PORT` do `.env`, que é 3001; pare a `app1` antes ou troque a porta.
+**Rodar fora do Compose**: com `postgres` e `sqs` no ar, rode um comando por vez. O `dev` usa o `PORT` do `.env`, que é
+3001; pare a `app1` antes ou troque a porta.
+
+```bash
+bun run migrate:up
+bun run queue:init
+bun run dev
+```
 
 ## 4. Variáveis de ambiente
 
@@ -175,7 +258,7 @@ No Compose, o serviço `migrate` roda `migrate:up` antes das apps. O ciclo `up �
 | Script | O que faz | Requer |
 |---|---|---|
 | `bun run dev` / `bun run start` | sobe a app (`src/main.ts`), com watch no `dev` | `postgres` e `sqs` |
-| `bun run typecheck` | `tsc --noEmit` estrito | — |
+| `bun run typecheck` | `tsc --noEmit` estrito (inclui `load/` e `demo/`) | — |
 | `bun run migrate:up` / `migrate:down` | migrations | `postgres` |
 | `bun run queue:init` | cria as 3 filas FIFO e o redrive (idempotente) | `sqs` |
 | `bun run test:unit` | `test/unit`: domínio, regras e guardrails de código, sem I/O | — |
@@ -183,9 +266,11 @@ No Compose, o serviço `migrate` roda `migrate:up` antes das apps. O ciclo `up �
 | `bun run test:concurrency` | `test/concurrency`: 3 processos reais da app, SIGKILL, e SIGTERM em container Linux | `postgres`, `sqs` e Docker |
 | `bun run test` | `test:unit`, `test:integration` e `test:concurrency`, em sequência | idem |
 | `bun run test:chaos` | conjunto focado de testes de falha (ver abaixo) | idem |
-| `bun run test:load` | teste de carga contra o cluster: 3 cenários (wallets distribuídas, wallet quente, duplicatas) com throughput, p50/p95/p99, status HTTP, lock, outbox e verificação final das invariantes; JSON em `load/results/` | cluster no ar (`docker compose --profile cluster up -d --build`) |
+| `bun run test:load` | teste de carga contra o cluster ([seção 10](#10-teste-de-carga)) | cluster no ar |
+| `bun run demo` | console de demonstração em http://127.0.0.1:4000 ([seção 9](#9-console-de-demonstração)) | cluster no ar |
 
-Na máquina de referência a suíte completa leva cerca de 4 minutos.
+**Números da suíte** (`bun run test`): **691** testes unitários (37 arquivos), **262** de integração (43 arquivos) e
+**24** de concorrência (19 arquivos), cerca de 4 minutos na máquina de referência.
 
 **`test:chaos`** é um alias para quatro testes de falha que **já fazem parte** de `test:concurrency`. É um conjunto
 focado e determinístico de cenários de queda, **não** um harness de caos aleatório:
@@ -197,14 +282,10 @@ focado e determinístico de cenários de queda, **não** um harness de caos alea
 | `test/concurrency/concurrent-publishers.test.ts` | 3 publicadores na mesma outbox, um deles morto entre o envio e a marca |
 | `test/concurrency/graceful-sigterm.test.ts` | SIGTERM real em container Linux, com mensagem em andamento e o ready lido durante a drenagem |
 
-**`test:load`** é o teste de carga (diferencial opcional do enunciado). Ele não faz parte de `bun run test`. A
-metodologia, o ambiente, os resultados e a análise estão em [docs/load-test.md](docs/load-test.md). Os parâmetros vêm
-por env, por exemplo `LOAD_CONCURRENCY=64 LOAD_DURATION_S=60 bun run test:load`. O script sai com código 1 se a
-verificação final das invariantes falhar.
-
 ## 7. Exemplos de uso (curl)
 
-Os ids variam a cada execução; use os que as respostas devolverem. Erros saem no formato
+Os exemplos usam sintaxe de shell Unix (Git Bash no Windows; no PowerShell, troque `curl` por `curl.exe` e ajuste as
+aspas). Os ids variam a cada execução; use os que as respostas devolverem. Erros saem no formato
 `{ "error": { "code", "message", "retryable", "correlationId", "details?" } }`. Toda resposta traz o header
 `X-Correlation-Id`, que é aceito na requisição ou gerado pelo serviço.
 
@@ -244,6 +325,10 @@ T=<transactionId devolvido>
 ```
 
 Para REFUND e ROLLBACK, inclua `"referenceExternalTransactionId":"bet-1"` com o mesmo valor da referência.
+
+**O cenário 100/80/80 por linha de comando**: numa wallet nova de 100.00, envie duas BETs de 80.00 com chaves
+diferentes ao mesmo tempo, uma na 3001 e outra na 3002 (por exemplo, dois `curl` com `&` e um `wait`). Uma volta 201
+`PROCESSED`, a outra 422 `REJECTED` `INSUFFICIENT_FUNDS`, e o saldo final é 20.00 com um único DEBIT no ledger.
 
 **Consultar transação** pelo id interno ou pelo id do provedor:
 
@@ -287,7 +372,7 @@ curl -s localhost:3001/metrics | grep -v '^#'
 | `wager-transactions-dlq.fifo` | DLQ da entrada; redrive com `maxReceiveCount` 5 | mensagens enviadas pela aplicação levam `errorCode`, `errorClass`, `receiveCount` e `consumer` |
 | `wager-events.fifo` | saída da outbox (eventos de integração) | `MessageGroupId` = aggregateId (walletId); `MessageDeduplicationId` = eventId |
 
-O MiniStack aceita o protocolo JSON do SQS sem assinatura, então dá para inspecionar as filas só com curl:
+O MiniStack aceita o protocolo JSON do SQS sem assinatura, então dá para inspecionar as filas só com curl (Git Bash):
 
 ```bash
 sqs() { curl -s -X POST http://localhost:4566/ -H "X-Amz-Target: AmazonSQS.$1" \
@@ -317,7 +402,77 @@ sqs SendMessage '{"QueueUrl":"'$Q'/wager-transactions.fifo","MessageGroupId":"'$
 Com o `aws` CLI instalado, os mesmos comandos funcionam com `--endpoint-url http://localhost:4566` e as credenciais
 `test`/`test`. A imagem do MiniStack não traz `awslocal`.
 
-## 9. Troubleshooting
+## 9. Console de demonstração
+
+Painel **opcional** para ver o sistema funcionando sem escrever comandos. É uma página única em HTML, CSS e JS puros
+(`demo/index.html`), servida por um proxy Bun (`demo/server.ts`). O proxy escuta **só em `127.0.0.1:4000`** e repassa
+`/api/1/*`, `/api/2/*` e `/api/3/*` para as instâncias 3001, 3002 e 3003; uma instância que não responde vira 502
+`{"error":"instance_unreachable"}`. O console **não altera a API nem `src/`**: só chama as rotas públicas que já existem.
+
+Com o cluster no ar (`docker compose --profile cluster up -d --build`):
+
+```bash
+bun run demo
+```
+
+e abra **http://127.0.0.1:4000**.
+
+![Console de demonstração depois do roteiro completo](docs/img/demo-console.png)
+
+| Elemento | O que mostra |
+|---|---|
+| Indicadores do topo | o `/health/ready` de cada instância, atualizado a cada 3 s (verde pronta, amarelo não pronta, vermelho fora do ar) |
+| **Criar wallet · R$ 100,00** | cria uma wallet com `playerId` gerado e mostra saldo, id e `version` |
+| **Duas BETs de 80,00 ao mesmo tempo** | dispara as duas juntas (`Promise.all`), uma na instância 1 e outra na 2, e mostra HTTP, status e `failureCode` de cada uma: uma `201 PROCESSED`, a outra `422 REJECTED INSUFFICIENT_FUNDS`; mostra também o saldo final, 100,00 → 20,00 |
+| **Reenviar a primeira (replay)** | reenvia a BET da instância 1 pela instância 3, com a mesma chave: `idempotentReplay: true` e o mesmo `transactionId` |
+| **Mesma chave, valor diferente (conflito)** | a mesma chave com 81,00: `409 IDEMPOTENCY_CONFLICT` |
+| **Reconciliar** | a tabela do ledger (direção, valor, saldo antes e depois) e o selo verde "consistente" ou vermelho "divergente", com `difference` e `checkedEntries` |
+| Métricas | `transactions_total` por status, `duplicates_total`, `outbox_pending_events` e `reconciliation_divergences_total`, lidos de `/metrics` das 3 instâncias (contadores por instância, somados) |
+| Linha do tempo e rodapé | cada requisição feita (instância, rota, status, tempo) e o `correlationId` da última resposta |
+| **▶ Executar roteiro completo** | roda tudo acima em sequência |
+
+Os valores monetários são tratados só como texto na página. As portas podem ser trocadas por env: `DEMO_PORT` e
+`DEMO_INSTANCE_1` a `DEMO_INSTANCE_3`.
+
+## 10. Teste de carga
+
+Diferencial opcional do enunciado. Fica fora de `bun run test`.
+
+```bash
+bun run test:load
+```
+
+- **Pré-requisito**: o cluster no ar (`docker compose --profile cluster up -d --build`), com as 3 instâncias prontas.
+- **O que faz**:
+  - cria 200 wallets e 1 wallet quente;
+  - aquece por 5 s, sem medir;
+  - roda **3 cenários** de 30 s com 32 requisições em voo:
+    - **A**: BET, WIN e LOSS espalhados entre as wallets e as 3 instâncias;
+    - **B**: tudo numa única wallet, o custo do lock por wallet;
+    - **C**: como A, com 20% de reenvios com a mesma chave.
+- **O que mede**:
+  - throughput, p50, p95 e p99, contagem por status HTTP (inclusive 503) e replays reconhecidos;
+  - pelo `/metrics`: lock esgotado (`55P03`), pico de `outbox_pending_events` e de `outbox_oldest_pending_age_seconds`,
+    tempo e vazão de drenagem da outbox.
+- **Verificação final**: reconcilia todas as wallets tocadas e confere nenhum saldo negativo e o saldo esperado pelo
+  cliente igual ao armazenado; se algo falhar, sai com código 1.
+- **Duração**: cerca de 10 minutos. Cada cenário só começa com a outbox vazia, e a drenagem levou de 10 s a 4 min por
+  cenário nas execuções registradas.
+- **Resultados**: tabela no terminal e JSON em `load/results/load-<execução>.json`. Os JSON são ignorados pelo git,
+  exceto o exemplo curado `load/results/example.json`.
+- **Parâmetros por env**: `LOAD_URLS`, `LOAD_WALLETS` (200), `LOAD_CONCURRENCY` (32), `LOAD_DURATION_S` (30),
+  `LOAD_WARMUP_S` (5), `LOAD_DUPLICATE_RATIO` (0.2), `LOAD_SCENARIOS` (`A,B,C`), `LOAD_EVENT_SINK` (`0` desliga o
+  consumidor de eventos simulado), `LOAD_DRAIN_TIMEOUT_S` (1200), `LOAD_SQS_ENDPOINT` e `SQS_EVENTS_QUEUE`.
+
+Ambiente, metodologia, resultados de 3 execuções e análise estão em [docs/load-test.md](docs/load-test.md). Ressalva
+honesta: cliente, instâncias, banco e emulador **dividem a mesma máquina** (um desktop com Docker Desktop no Windows),
+então os números não são capacidade de produção. Resumo:
+- cerca de 390–445 req/s com wallets distribuídas;
+- 73–152 req/s numa wallet quente;
+- nenhum erro e invariantes íntegras;
+- o gargalo é a publicação da outbox.
+
+## 11. Troubleshooting
 
 - **Porta ocupada** (`Bind for 0.0.0.0:5432 failed: port is already allocated`): para o PostgreSQL, use
   `POSTGRES_PORT` (seção 3) e atualize `DATABASE_URL` e `TEST_DATABASE_ADMIN_URL` no `.env`. As portas 4566 e 3001 a
@@ -332,13 +487,15 @@ Com o `aws` CLI instalado, os mesmos comandos funcionam com `--endpoint-url http
 - **SIGTERM no Windows**: fora de container, o Windows mata o processo à força e o encerramento gracioso não roda. Por
   isso os testes de SIGTERM rodam em container Linux (`docker compose --profile test run`), e passam também no Docker
   Desktop.
+- **`curl` no PowerShell 5.1**: é um alias de `Invoke-WebRequest` e não aceita as opções dos exemplos. Use
+  `curl.exe`, o Git Bash ou o console de demonstração.
 - **Ready em 503 com `"sqs":"down"` depois de reiniciar o `sqs`**: o MiniStack guarda as filas só em memória e volta
   sem nenhuma. Rode `docker compose run --rm queue-init`, que é idempotente; o ready volta a 200 sem reiniciar as apps,
   e a outbox acumulada é publicada.
 - **Bancos `jg_test_*` ou filas `jg-*` sobrando** depois de uma execução interrompida: o preload dos testes apaga os
   bancos na próxima execução; as filas de teste são apagadas no fim de cada arquivo.
 
-## 10. Estrutura de pastas
+## 12. Estrutura de pastas
 
 ```text
 src/
@@ -357,17 +514,18 @@ src/
   (cada módulo: domain/ → application/ → infrastructure/ e interfaces/)
 migrations/                   6 migrations em SQL cru, com up e down
 scripts/                      migrate.ts e queue-init.ts
-load/                         load-test.ts (bun run test:load) e results/ (só o exemplo curado é versionado)
 test/
   unit/                       domínio e guardrails de código (conventions.test.ts)
   integration/                app em processo, PostgreSQL e MiniStack reais, proxies TCP para falhas
   concurrency/                3 processos reais, SIGKILL, SIGTERM em container
   support/                    harnesses, banco por arquivo, filas por arquivo, proxy TCP, assertWalletMatchesLedger
-docs/                         enunciado, interpretações (I-01 a I-76) e relatório do teste de carga
+load/                         opcional, fora do serviço: load-test.ts (bun run test:load) e results/ (só o exemplo curado é versionado)
+demo/                         opcional, fora do serviço: server.ts (proxy em 127.0.0.1:4000) e index.html (bun run demo)
+docs/                         enunciado, interpretações (I-01 a I-76), relatório do teste de carga e img/
 specs/                        spec, plan, research, data-model, contracts, tasks e notas das features 001 a 003
 ```
 
-## 11. Cobertura do enunciado §13
+## 13. Cobertura do enunciado §13
 
 Todos os testes de integração e concorrência rodam contra PostgreSQL e MiniStack reais; o guardrail
 `test/unit/conventions.test.ts` impede mocks de banco e de SQS nessas pastas. A invariante final
@@ -399,28 +557,3 @@ Todos os testes de integração e concorrência rodam contra PostgreSQL e MiniSt
 | ROLLBACK ou REFUND entregue antes da referência | `test/integration/pending-reference.test.ts`, `test/integration/pending-reference-worker.test.ts`, `test/concurrency/pending-resolution-race.test.ts`, `test/concurrency/pending-order.test.ts` |
 | Reinício do serviço com consistência final comprovada | `test/concurrency/sigkill-recovery.test.ts`, `test/concurrency/crash-recovery.test.ts` |
 | Invariante final `wallet.balance == ledger` | `test/support/assert-wallet-matches-ledger.ts`, além da reconciliação sob carga em `test/concurrency/reconciliation-under-load.test.ts` |
-
-## 12. Console de demonstração
-
-Painel opcional para apresentar o sistema ao vivo. Ele não faz parte da API nem dos testes e não muda nada em `src/`.
-É uma página única em HTML, CSS e JS puros (`demo/index.html`), servida por um proxy Bun (`demo/server.ts`) que escuta
-só em `127.0.0.1:4000` e repassa `/api/1/*`, `/api/2/*` e `/api/3/*` para as instâncias 3001, 3002 e 3003. Uma
-instância que não responde vira 502 `{"error":"instance_unreachable"}`.
-
-```bash
-docker compose --profile cluster up -d --build
-bun run demo          # abra http://127.0.0.1:4000
-```
-
-O que mostra:
-
-- o ready das 3 instâncias, atualizado a cada 3 s;
-- a criação de uma wallet de 100,00;
-- duas BETs de 80,00 disparadas ao mesmo tempo nas instâncias 1 e 2: uma `PROCESSED` e outra `REJECTED`
-  `INSUFFICIENT_FUNDS`, saldo final 20,00;
-- o replay da primeira BET por outra instância e o conflito com a mesma chave e outro valor (409);
-- o ledger da wallet e a reconciliação (selo "consistente" ou "divergente");
-- as métricas lidas de `/metrics`;
-- a linha do tempo das requisições, com o `correlationId` de cada uma.
-
-O botão "Executar roteiro completo" roda tudo em sequência. Os valores monetários são tratados só como texto.
