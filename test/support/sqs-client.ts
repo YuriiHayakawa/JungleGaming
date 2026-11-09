@@ -174,6 +174,10 @@ export async function waitForEmpty(url: string, timeoutMs = 10_000): Promise<voi
   }
 }
 
+export async function deleteMessage(url: string, receiptHandle: string): Promise<void> {
+  await client.send(new DeleteMessageCommand({ QueueUrl: url, ReceiptHandle: receiptHandle }));
+}
+
 export async function deleteQueue(url: string): Promise<void> {
   await client.send(new DeleteQueueCommand({ QueueUrl: url })).catch(() => {});
 }

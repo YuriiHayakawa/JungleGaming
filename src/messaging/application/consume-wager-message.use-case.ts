@@ -13,7 +13,8 @@ import { computePayloadHash } from '../../wagering/application/payload-hash.ts';
 import type { SubmitWagerTransactionUseCase } from '../../wagering/application/submit-wager-transaction.use-case.ts';
 import type { MessageAction, MessageHandler } from './message-batch.ts';
 import type { SqsMessage, SqsPort } from './sqs.port.ts';
-import { parseWagerMessage } from './wager-message.envelope.ts';
+import { classifyMessageFailure, submissionAction } from './message-classification.ts';
+import { InvalidWagerMessageError, parseWagerMessage } from './wager-message.envelope.ts';
 
 export interface ConsumerLogger {
   info(message: string, fields?: Record<string, unknown>): void;
@@ -39,8 +40,10 @@ export interface ConsumeWagerMessageDeps {
  * 4. o mesmo use case do HTTP, com origem fila e a inbox anexada: inbox, transação, saldo, ledger e outbox no mesmo
  *    commit (FR-003); REJECTED e PENDING_REFERENCE gravados são negócio → ack (FR-008);
  * 5. ack = DeleteMessage só depois do commit (FR-005), com o failpoint `after_commit_before_ack` entre os dois (R-29).
- * Qualquer erro: a mensagem não é apagada e volta depois de uma espera crescente (a classificação completa entre
- * transitório, permanente e inesperado é da US2).
+ * Erros (research R-23, `message-classification.ts`): transitório e inesperado até o 4º recebimento → a mensagem não
+ * é apagada e volta com espera crescente (ChangeMessageVisibility); permanente, e inesperado no 5º recebimento →
+ * SendMessage à DLQ com `errorCode`, `errorClass`, `receiveCount` e `consumer` e, **só depois do envio aceito**,
+ * DeleteMessage (FR-040). O consumidor nunca grava FAILED (FR-011, I-61).
  */
 export class ConsumeWagerMessageUseCase implements MessageHandler {
   constructor(private readonly deps: ConsumeWagerMessageDeps) {}
@@ -50,7 +53,12 @@ export class ConsumeWagerMessageUseCase implements MessageHandler {
     try {
       envelope = parseWagerMessage(message.body);
     } catch (error) {
-      return this.onError(message, error, { correlationId: message.sqsMessageId });
+      // Sem envelope válido não há messageId confiável: a correlação e a deduplicação da DLQ usam o id do SQS (N-08).
+      const knownId = error instanceof InvalidWagerMessageError ? error.messageId : undefined;
+      const context: RequestContext = knownId
+        ? { correlationId: knownId, messageId: knownId, causationId: knownId }
+        : { correlationId: message.sqsMessageId };
+      return this.onError(message, error, context, knownId ?? message.sqsMessageId);
     }
     const { messageId, input, idempotencyKey } = envelope;
     const context: RequestContext = { correlationId: messageId, messageId, causationId: messageId };
@@ -78,6 +86,7 @@ export class ConsumeWagerMessageUseCase implements MessageHandler {
           inbox: { consumerName: this.deps.consumer.name, messageId },
           causationId: messageId,
         });
+        submissionAction(outcome.result.status); // REJECTED, PENDING_REFERENCE e replay de FAILED também são ack
         return {
           type: 'ack',
           outcome: outcome.effect === 'new' ? 'processed' : outcome.effect,
@@ -86,7 +95,7 @@ export class ConsumeWagerMessageUseCase implements MessageHandler {
           context: store,
         };
       } catch (error) {
-        return this.onError(message, error, store ?? context);
+        return this.onError(message, error, store ?? context, messageId);
       }
     });
   }
@@ -117,26 +126,40 @@ export class ConsumeWagerMessageUseCase implements MessageHandler {
           });
           return;
         }
-        case 'dlq':
-          throw new Error('DLQ handling is not available yet');
+        case 'dlq': {
+          // FR-040: primeiro o envio à DLQ, aceito pelo SQS; só depois o delete. Se o envio falhar, a exceção sobe e a
+          // mensagem continua na fila principal (volta, é reclassificada e reenviada; a deduplicação da DLQ absorve).
+          await this.deps.sqs.send(this.deps.queues.dlq, {
+            body: message.body,
+            groupId: message.groupId ?? action.deduplicationId,
+            deduplicationId: action.deduplicationId,
+            attributes: {
+              errorCode: action.errorCode,
+              errorClass: action.errorClass,
+              receiveCount: String(message.receiveCount),
+              consumer: this.deps.consumer.name,
+            },
+          });
+          await this.deps.sqs.delete(this.deps.queues.transactions, message.receiptHandle);
+          this.deps.logger.info('consumer.message', {
+            outcome: 'dlq',
+            errorCode: action.errorCode,
+            errorClass: action.errorClass,
+            error: errorName(action.error),
+            receiveCount: message.receiveCount,
+          });
+          return;
+        }
       }
     });
   }
 
-  /** Espera antes da próxima entrega: min(base × 2^(n−1), teto), n = ApproximateReceiveCount (FR-009). */
-  private retryDelaySeconds(receiveCount: number): number {
-    const { retryBaseSeconds, retryMaxSeconds } = this.deps.consumer;
-    return Math.min(retryBaseSeconds * 2 ** (Math.max(receiveCount, 1) - 1), retryMaxSeconds);
-  }
-
-  private onError(message: SqsMessage, error: unknown, context: RequestContext): MessageAction {
-    return {
-      type: 'retry',
-      visibilitySeconds: this.retryDelaySeconds(message.receiveCount),
-      error,
-      errorClass: 'unexpected',
-      context,
-    };
+  private onError(message: SqsMessage, error: unknown, context: RequestContext, deduplicationId: string): MessageAction {
+    const classified = classifyMessageFailure(error, message.receiveCount, this.deps.consumer);
+    if (classified.type === 'dlq') {
+      return { type: 'dlq', errorCode: classified.errorCode, errorClass: classified.errorClass, deduplicationId, error, context };
+    }
+    return { type: 'retry', visibilitySeconds: classified.visibilitySeconds, errorClass: classified.errorClass, error, context };
   }
 }
 

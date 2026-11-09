@@ -43,3 +43,32 @@ Diff revisado: `submit-wager-transaction.use-case.ts` (origem fila, inbox, causa
 | Ack só depois do commit | OK | `consumeBatch` só chama `apply` depois que `process` resolve; `process` só resolve depois que `unitOfWork.run` confirmou. Erro → `retry` sem delete. T043 (queda entre commit e ack) e T041 provam. |
 | DLQ antes de apagar | N/A | A US1 não envia à DLQ (US2). |
 | Publisher marca depois do SendMessage | N/A | Publicador é da US3. |
+
+## US2
+
+| # | Decisão | Motivo | Task |
+|---|---------|--------|------|
+| N-13 | `TransactionResult.balance` passou a ser opcional e o `toTransactionResult` aceita FAILED (com `failureCode` e `retryable` false); o `httpStatusFor` lança `FailedTransactionReplayError` para FAILED. | O replay de FAILED pela fila precisa seguir o caminho normal de replay para gravar a inbox (contracts/queues.md: "replay … inclusive de FAILED … inbox gravada"); só o HTTP transforma FAILED em 500. O schema permite FAILED sem saldo observado (`wager_tx_observed_balance_ck`), embora o worker sempre o tenha (I-61). Nenhum saldo é inventado. | T056 |
+| N-14 | `FailedTransactionReplayError` não é registrado como `http.unexpected_error`. | É um estado terminal conhecido (I-62), não uma falha desta requisição. | T056 |
+| N-15 | O envio à DLQ usa `MessageDeduplicationId` = `messageId` quando o envelope o tem válido; senão, o id da mensagem no SQS. O `MessageGroupId` é o da mensagem original. | contracts/queues.md (grupo original, deduplicação pelo `messageId`); sem `messageId` válido o id do SQS é estável entre reentregas da mesma mensagem. | T055 |
+| N-16 | Transitório no 5º recebimento continua `retry` (a aplicação não envia à DLQ); quem leva à DLQ é o redrive no 6º recebimento, sem atributos. | I-30 e contracts/queues.md (o redrive é o caminho do transitório; só o inesperado é enviado pela aplicação no 5º, I-71). | T054 |
+
+### Revisão da US2 contra o review-checklist.md (T057)
+
+Diff revisado: `message-classification.ts`, `consume-wager-message.use-case.ts` (classificação e DLQ),
+`transaction-result.ts`, `global-exception.filter.ts`, `errors.ts`.
+
+| Item | Resultado | Evidência |
+|------|-----------|-----------|
+| Dinheiro sem `number` | OK | Nenhuma conta com dinheiro; `retryDelaySeconds` e atributos de DLQ são contagens, não valores. |
+| Saldo só sob lock | OK | A US2 não escreve saldo nem status; o replay de FAILED não muda a transação (T053 confere status e wallet). |
+| Unicidade no banco | OK | Conflitos e duplicatas continuam detectados pelas constraints da 001 e por `inbox_messages_pk`; a classificação só lê o tipo do erro. |
+| Outbox na mesma transação | OK | Nenhum evento novo; replay de FAILED pela fila não grava evento (T053). |
+| Triggers presentes | N/A | Sem migration nova. |
+| Sem mock em integração e concorrência | OK | `fake-sqs` só em `test/unit/consume-wager-message.test.ts`; T050–T053 com MiniStack e PostgreSQL reais (o proxy TCP repassa o protocolo real). |
+| Sem relógio nem id no domínio | OK | Nada de tempo ou id novo; a espera vem do `ApproximateReceiveCount`. |
+| Ordem de lock wallet primeiro | N/A | Nenhuma escrita nova em `wager_transactions`. |
+| Ack só depois do commit | OK | `submissionAction` só é avaliado depois que `submit` resolveu; erros nunca geram ack; transitórios e inesperados (n < 5) só mudam a visibilidade (T051, T052). |
+| DLQ antes de apagar | OK | `apply` (`dlq`): `sqs.send(dlq, …)` aguardado antes de `sqs.delete(principal, …)`; se o envio falhar, a exceção sobe e o delete não acontece (T049 com o fake: ordem `send` → `delete` e nenhum delete quando o send falha; T050 e T052 com o MiniStack: mensagem na DLQ com os atributos e ausente da principal). |
+| Ausência de FAILED no consumidor | OK | O consumidor não chama `fail` nem grava FAILED; inesperado vai à DLQ no 5º recebimento (T052 confere zero linhas FAILED). |
+| Publisher marca depois do SendMessage | N/A | Publicador é da US3. |

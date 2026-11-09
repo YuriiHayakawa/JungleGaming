@@ -10,6 +10,10 @@ import {
 } from '@nestjs/common';
 import { DriverException } from '@mikro-orm/core';
 import { GlobalExceptionFilter, toHttpError } from '../../src/platform/http/global-exception.filter.ts';
+import { FailedTransactionReplayError } from '../../src/shared-kernel/application/errors.ts';
+import { httpStatusFor } from '../../src/wagering/application/transaction-result.ts';
+import { WagerTransactionStatus } from '../../src/wagering/domain/wager-transaction.ts';
+import { FailureCode } from '../../src/wagering/domain/failure-code.ts';
 import {
   IdempotencyConflictError,
   IdempotencyKeyRequiredError,
@@ -147,5 +151,36 @@ describe('GlobalExceptionFilter: escreve status, headers e corpo na resposta', (
     expect(written.status).toBe(503);
     expect(written.headers['Retry-After']).toBe('2');
     expect(written.body).toMatchObject({ error: { code: 'SERVICE_UNAVAILABLE', correlationId: 'from-context' } });
+  });
+});
+
+// ---- feature 002 (T056; FR-030; I-62)
+
+describe('replay de transação FAILED', () => {
+  const failedCtx = { correlationId: 'corr-failed', retryAfterSeconds: 1 };
+
+  test('FailedTransactionReplayError → 500 INTERNAL_ERROR com retryable false, no envelope do I-38', () => {
+    const out = toHttpError(new FailedTransactionReplayError(), failedCtx);
+    expect(out.status).toBe(500);
+    expect(out.headers).toEqual({});
+    expect(out.body).toEqual({
+      error: { code: 'INTERNAL_ERROR', message: 'Unexpected error', retryable: false, correlationId: 'corr-failed' },
+    });
+  });
+
+  test('o 500 de erro inesperado continua retryable true (I-49)', () => {
+    expect(toHttpError(new InternalError(), failedCtx).body.error.retryable).toBe(true);
+  });
+
+  test('httpStatusFor de um resultado FAILED lança FailedTransactionReplayError', () => {
+    expect(() =>
+      httpStatusFor({
+        transactionId: 't',
+        status: WagerTransactionStatus.Failed,
+        idempotentReplay: true,
+        failureCode: FailureCode.InternalError,
+        retryable: false,
+      }),
+    ).toThrow(FailedTransactionReplayError);
   });
 });

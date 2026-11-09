@@ -315,15 +315,15 @@ efeito.
 
 ### Testes da User Story 2 (escrever primeiro; devem falhar)
 
-- [ ] T048 [P] [US2] Escrever `test/unit/message-classification.test.ts` (R-23; FR-008 a FR-010, FR-009a, FR-040; I-30,
+- [X] T048 [P] [US2] Escrever `test/unit/message-classification.test.ts` (R-23; FR-008 a FR-010, FR-009a, FR-040; I-30,
   I-61, I-68, I-70, I-71): cada origem de erro vira a ação certa (`ack`, `retry` com visibilidade, `dlq` com
   `errorCode`/`errorClass`); visibilidade `min(base × 2^(n−1), teto)` para `n` = 1 a 4 com base 5 e teto 60
   (5, 10, 20, 40 s); erro inesperado com `n` < 5 → `retry`, com `n` = 5 → `dlq` `INTERNAL_ERROR`/`unexpected`;
   permanentes → `dlq` com `errorClass` `permanent` já no 1º recebimento
-- [ ] T049 [P] [US2] Escrever `test/unit/consume-wager-message.test.ts` com o `fake-sqs` (FR-040; I-68, I-70): numa
+- [X] T049 [P] [US2] Escrever `test/unit/consume-wager-message.test.ts` com o `fake-sqs` (FR-040; I-68, I-70): numa
   mensagem permanente, o `send` à DLQ (com `errorCode`, `errorClass`, `receiveCount` e `consumer`) acontece antes do
   `delete`; se o `send` falhar, o `delete` não é chamado e a mensagem continua na fila
-- [ ] T050 [P] [US2] Escrever `test/integration/consumer-permanent-errors.test.ts` (US2 cenário 3; FR-010, FR-040; I-28,
+- [X] T050 [P] [US2] Escrever `test/integration/consumer-permanent-errors.test.ts` (US2 cenário 3; FR-010, FR-040; I-28,
   I-60, I-66, I-68, I-69, I-70; SC-004): cada caso vai à DLQ no 1º recebimento, com os atributos de
   `contracts/queues.md`, sai da fila principal e não grava nada (nem inbox): corpo que não é JSON e envelope incompleto
   (`MALFORMED_MESSAGE`); `messageId` fora do formato (`MALFORMED_MESSAGE`); `type` "Other" (`UNSUPPORTED_MESSAGE_TYPE`);
@@ -331,34 +331,34 @@ efeito.
   (`OPENING_NOT_ALLOWED`); wallet inexistente (`WALLET_NOT_FOUND`); mesmo `messageId` com outro conteúdo
   (`INBOX_PAYLOAD_MISMATCH`); mesma chave com outro conteúdo e mesmo id externo com outra chave
   (`IDEMPOTENCY_CONFLICT`, sem linha de inbox)
-- [ ] T051 [P] [US2] Escrever `test/integration/consumer-transient-errors.test.ts` (US2 cenários 1, 2 e 4; FR-009, FR-034;
+- [X] T051 [P] [US2] Escrever `test/integration/consumer-transient-errors.test.ts` (US2 cenários 1, 2 e 4; FR-009, FR-034;
   I-30, I-34, I-51; SC-004), com a app atrás do proxy TCP da 001 para o PostgreSQL e `CONSUMER_RETRY_BASE_SECONDS=1`:
   banco cortado em todas as entregas → a mensagem chega à DLQ pelo redrive depois de 5 recebimentos, sem os atributos da
   aplicação, e nada é gravado; banco cortado só nas 2 primeiras entregas → 1 efeito; lock da wallet segurado por fora
   (`FOR UPDATE`) → a mensagem não é confirmada e, solto o lock, é processada uma vez; termina com
   `assertWalletMatchesLedger`
-- [ ] T052 [P] [US2] Escrever `test/integration/consumer-unexpected-errors.test.ts` (US2 cenário 4a; FR-009a, FR-011,
+- [X] T052 [P] [US2] Escrever `test/integration/consumer-unexpected-errors.test.ts` (US2 cenário 4a; FR-009a, FR-011,
   FR-040; I-61, I-71; SC-004), com `FAILPOINT=after_ledger_insert_before_commit` sempre ativo e
   `CONSUMER_RETRY_BASE_SECONDS=1`: as 4 primeiras entregas voltam com espera crescente; no 5º recebimento a aplicação
   envia a mensagem à DLQ com `errorCode` `INTERNAL_ERROR` e `errorClass` `unexpected` e a apaga da principal; nada é
   gravado e nenhuma transação fica FAILED
-- [ ] T053 [P] [US2] Escrever `test/integration/failed-replay.test.ts` (US2 cenário 5; FR-012, FR-030; I-62): com uma
+- [X] T053 [P] [US2] Escrever `test/integration/failed-replay.test.ts` (US2 cenário 5; FR-012, FR-030; I-62): com uma
   transação FAILED semeada por SQL respeitando as constraints (`status` FAILED, `failure_code` `INTERNAL_ERROR`), o
   replay por HTTP → 500 `INTERNAL_ERROR` com `retryable` false no envelope do I-38, e o replay pela fila → confirmado,
   sem efeito nem evento
 
 ### Implementação da User Story 2
 
-- [ ] T054 [US2] Implementar `src/messaging/application/message-classification.ts` (R-23). Faz o T048 passar
-- [ ] T055 [US2] Completar `src/messaging/application/consume-wager-message.use-case.ts` (FR-008 a FR-013, FR-040; I-30,
+- [X] T054 [US2] Implementar `src/messaging/application/message-classification.ts` (R-23). Faz o T048 passar
+- [X] T055 [US2] Completar `src/messaging/application/consume-wager-message.use-case.ts` (FR-008 a FR-013, FR-040; I-30,
   I-68, I-70, I-71): transitório e inesperado com `n` < 5 → `changeVisibility` com o backoff; inesperado no 5º
   recebimento e permanentes → `send` à DLQ com os atributos e, só depois do envio aceito, `delete`; o consumidor nunca
   grava FAILED. Faz o T049 a T052 passarem
-- [ ] T056 [US2] Implementar o replay de FAILED (FR-030; I-62): em `src/wagering/application/transaction-result.ts` o
+- [X] T056 [US2] Implementar o replay de FAILED (FR-030; I-62): em `src/wagering/application/transaction-result.ts` o
   status FAILED gera um erro de aplicação próprio (500, `INTERNAL_ERROR`, `retryable` false) mapeado por
   `src/platform/http/global-exception.filter.ts`, com teste em `test/unit/global-exception-filter.test.ts`; pela fila,
   o replay de FAILED é confirmado. Faz o T053 passar
-- [ ] T057 [US2] Revisar o diff da US2 contra o `review-checklist.md`, com atenção a "DLQ antes de apagar da fila
+- [X] T057 [US2] Revisar o diff da US2 contra o `review-checklist.md`, com atenção a "DLQ antes de apagar da fila
   principal" e à ausência de FAILED no consumidor; registrar item a item
 
 **Checkpoint US2**: `bun test test/unit/message-classification.test.ts test/unit/consume-wager-message.test.ts && bun test

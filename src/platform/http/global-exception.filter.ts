@@ -1,5 +1,5 @@
 import { HttpException, type ArgumentsHost, type ExceptionFilter } from '@nestjs/common';
-import { ApplicationError, type ErrorCode } from '../../shared-kernel/application/errors.ts';
+import { ApplicationError, FailedTransactionReplayError, type ErrorCode } from '../../shared-kernel/application/errors.ts';
 import { DomainError } from '../../shared-kernel/domain/errors.ts';
 import { currentRequestContext } from '../correlation/request-context.ts';
 import type { JsonLogger } from '../logging/json-logger.ts';
@@ -82,6 +82,8 @@ export interface HttpErrorResult {
 }
 
 function codeFor(exception: unknown): { code: HttpErrorCode; details?: Record<string, unknown>; unexpected: boolean } {
+  // Replay de FAILED (I-62): estado terminal conhecido, não é falha inesperada desta requisição.
+  if (exception instanceof FailedTransactionReplayError) return { code: exception.code, unexpected: false };
   if (exception instanceof ApplicationError) {
     return { code: exception.code, details: exception.details, unexpected: exception.code === 'INTERNAL_ERROR' };
   }
@@ -121,7 +123,8 @@ export function toHttpError(
     error: {
       code,
       message,
-      retryable: RETRYABLE_BY_CODE[code],
+      // A taxonomia §7 define o retryable por código; a única exceção é o replay de FAILED (I-62).
+      retryable: exception instanceof FailedTransactionReplayError ? exception.retryable : RETRYABLE_BY_CODE[code],
       correlationId: context.correlationId,
       ...(details ? { details } : {}),
     },

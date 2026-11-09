@@ -94,3 +94,15 @@ export class InternalError extends ApplicationError {
     super('Unexpected error', undefined, options);
   }
 }
+
+/**
+ * Replay de uma transação gravada como FAILED pelo worker de PENDING_REFERENCE (I-61, I-62; FR-030): 500 INTERNAL_ERROR
+ * com `retryable` false, exceção documentada à taxonomia §7. Reenviar a mesma requisição nunca muda um estado terminal.
+ */
+export class FailedTransactionReplayError extends ApplicationError {
+  readonly code = 'INTERNAL_ERROR' as const;
+  readonly retryable = false;
+  constructor() {
+    super('Unexpected error');
+  }
+}
