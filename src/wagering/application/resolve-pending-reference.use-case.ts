@@ -121,7 +121,11 @@ export class ResolvePendingReferenceUseCase {
   private async evaluateWithRetry(pending: PendingClaim): Promise<EvaluationOutcome> {
     for (let attempt = 0; ; attempt++) {
       try {
-        return await this.deps.unitOfWork.run((em) => this.evaluateUnderLock(em, pending));
+        const outcome = await this.deps.unitOfWork.run((em) => this.evaluateUnderLock(em, pending));
+        // FR-036, N-45: só depois do commit; uma reavaliação desfeita (rollback, 40P01, 40001) não conta.
+        const status = COMMITTED_STATUS[outcome];
+        if (status) this.deps.metrics.increment('transactions_total', { status });
+        return outcome;
       } catch (error) {
         const kind = classifyDbError(error);
         if (kind === 'reversal-race' && attempt < MAX_REVERSAL_RACE_RETRIES) {
@@ -261,6 +265,13 @@ export class ResolvePendingReferenceUseCase {
     return this.deps.transactions.existsProcessedReversal(em, reference.id);
   }
 }
+
+/** Status gravado por uma reavaliação confirmada; reagendamento, `skipped` e `deferred` não gravam transação nova. */
+const COMMITTED_STATUS: Partial<Record<EvaluationOutcome, WagerTransactionStatus>> = {
+  processed: WagerTransactionStatus.Processed,
+  rejected: WagerTransactionStatus.Rejected,
+  exhausted: WagerTransactionStatus.Rejected,
+};
 
 /** Banco fora, conexão perdida, pool esgotado ou lock esgotado: rollback sem efeito, a tentativa não conta. */
 function isTransient(error: unknown): boolean {

@@ -204,7 +204,7 @@ Diff revisado: `test/integration/dependency-outage.test.ts` e `test/unit/polling
 | # | Decisão | Motivo | Task |
 |---|---------|--------|------|
 | N-41 | Pontos de registro, todos pela porta `METRICS` (R-32): `transactions_total{status}` no `TransactionRecorder` (submit pelo HTTP e pela fila, e worker) e no FAILED do worker; `duplicates_total{source="idempotency"}` em todo replay pela idempotência (HTTP ou fila) e `{source="inbox"}` na duplicata da inbox (caminho rápido do consumidor ou releitura no submit); `retries_total{worker}` no `retry` do consumidor, na falha de envio do publicador e na falha transitória de uma reavaliação do worker; `dlq_total{errorCode, errorClass}` depois do envio aceito à DLQ e do delete; `lock_conflicts_total` na unit of work ao ver `55P03`; `outbox_lag_ms` na marca do publicador (US3); `processing_latency_ms{worker}` por mensagem no consumidor (do `process` ao fim do `apply`) e por reavaliação no worker (sem contar `skipped` e `deferred`). | FR-036 e o T083. O `{errorClass}` no `dlq_total` atende a "com a classe do erro" do cenário 2 da US7, junto com o `errorCode` do T082. | T083 |
-| N-42 | `transactions_total` conta ao gravar, dentro da transação: uma tentativa da unit of work que sofre rollback depois (deadlock, falha de serialização, failpoint) também é contada. A abertura de wallet (OPENING) não entra no contador. | O R-32 define as métricas como observação, sem garantia; contar depois do commit exigiria levar o resultado até cada chamador. OPENING não é transação de aposta: entra com a wallet, por outro módulo. | T083 |
+| N-42 | ~~`transactions_total` conta ao gravar, dentro da transação~~ **Substituída pela N-45** (contagem só depois do commit). Continua valendo: a abertura de wallet (OPENING) não entra no contador. | A primeira versão contava no `TransactionRecorder`, antes do commit, e uma tentativa desfeita pela unit of work era contada também; corrigido a pedido (N-45). OPENING não é transação de aposta: entra com a wallet, por outro módulo. | T083 |
 | N-43 | A latência usa a porta `Clock` (`clock.now()`), não `performance.now()`. | Tempo só pela porta em `application` (constitution VI, guardrail (e)). A resolução é de milissegundos, suficiente para a observação. | T083 |
 | N-44 | Os rótulos são só `status`, `source`, `worker`, `errorCode` e `errorClass`; o T082 confere que nenhum rótulo tem formato de número (valor monetário). | FR-037. | T082 |
 
@@ -225,6 +225,12 @@ Diff revisado: porta `METRICS` no consumidor, no submit, no recorder, no worker,
 | Ack só depois do commit | OK | O `dlq_total` e o `retries_total` são registrados depois das chamadas ao SQS, dentro do `apply`; a ordem ack/DLQ não mudou. |
 | DLQ antes de apagar | OK | `dlq_total` só depois do `send` à DLQ e do `delete`. |
 | Publisher marca só depois do SendMessage | OK | Só um `retries_total` no ramo de falha de envio; a marca não mudou. |
+
+### Correção depois da US7 (2026-11-09)
+
+| # | Decisão | Motivo | Task |
+|---|---------|--------|------|
+| N-45 | `transactions_total{status}` é incrementado **só depois do commit**: no submit (HTTP e fila), quando a submissão termina com efeito `new` (a unit of work já confirmou, inclusive depois de repetir uma tentativa); no worker, quando a reavaliação confirmada concluiu a pendente (PROCESSED, REJECTED ou REJECTED por esgotamento); o FAILED, depois do commit da unidade separada. O `TransactionRecorder` não conta mais nada. Uma tentativa desfeita (rollback, `40P01`, `40001`, `23505` repetido) não conta; reagendamento, replay e duplicata não são transação nova. | Pedido do usuário: a contagem dentro da tentativa contava duas vezes uma transação cuja 1ª tentativa sofreu falha de serialização. Teste novo `metrics-after-commit.test.ts`: com `after_ledger_insert_before_commit:serialization_failure_once`, o contador do submit sobe uma única vez (antes da correção: 2, visto vermelho); com `after_pending_resolution_before_commit:serialization_failure_once`, o do worker também (antes: 2); um 503 por lock esgotado deixa o contador inalterado. | T083 |
 
 ## Polish
 

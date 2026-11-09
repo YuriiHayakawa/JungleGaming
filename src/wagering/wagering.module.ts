@@ -36,14 +36,13 @@ const TRANSACTION_RECORDER = Symbol('TRANSACTION_RECORDER');
   providers: [
     {
       provide: TRANSACTION_RECORDER,
-      inject: [APP_CONFIG, ID_GENERATOR, METRICS],
-      useFactory: (config: AppConfig, ids: IdGenerator, metrics: MetricsPort) =>
+      inject: [APP_CONFIG, ID_GENERATOR],
+      useFactory: (config: AppConfig, ids: IdGenerator) =>
         new TransactionRecorder({
           wallets: new MikroOrmWalletRepository(),
           transactions: new MikroOrmWagerTransactionRepository(),
           ledger: new MikroOrmLedgerRepository(),
           ids,
-          metrics,
           firstReferenceAttemptDelayMs: config.pendingWorker.backoffBaseMs,
         }),
     },

@@ -135,6 +135,9 @@ export class SubmitWagerTransactionUseCase {
   async submit(command: SubmitWagerTransactionCommand): Promise<SubmissionOutcome> {
     const outcome = await this.submitOnce(command);
     // FR-036: duplicata reconhecida pela idempotência (replay, HTTP ou fila) ou pela inbox (mesma mensagem).
+    // FR-036, N-45: transação gravada, contada só depois do commit (`submitOnce` só devolve `new` depois que a unit of
+    // work confirmou; uma tentativa desfeita e repetida não aparece aqui).
+    if (outcome.effect === 'new') this.deps.metrics.increment('transactions_total', { status: outcome.result.status });
     if (outcome.effect === 'replay') this.deps.metrics.increment('duplicates_total', { source: 'idempotency' });
     if (outcome.effect === 'duplicate') this.deps.metrics.increment('duplicates_total', { source: 'inbox' });
     return outcome;
