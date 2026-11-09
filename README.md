@@ -22,6 +22,7 @@ enunciado (I-01 a I-76) estão em [docs/interpretacoes.md](docs/interpretacoes.m
 9. [Troubleshooting](#9-troubleshooting)
 10. [Estrutura de pastas](#10-estrutura-de-pastas)
 11. [Cobertura do enunciado §13](#11-cobertura-do-enunciado-13)
+12. [Console de demonstração](#12-console-de-demonstração)
 
 ## 1. Pré-requisitos
 
@@ -398,3 +399,28 @@ Todos os testes de integração e concorrência rodam contra PostgreSQL e MiniSt
 | ROLLBACK ou REFUND entregue antes da referência | `test/integration/pending-reference.test.ts`, `test/integration/pending-reference-worker.test.ts`, `test/concurrency/pending-resolution-race.test.ts`, `test/concurrency/pending-order.test.ts` |
 | Reinício do serviço com consistência final comprovada | `test/concurrency/sigkill-recovery.test.ts`, `test/concurrency/crash-recovery.test.ts` |
 | Invariante final `wallet.balance == ledger` | `test/support/assert-wallet-matches-ledger.ts`, além da reconciliação sob carga em `test/concurrency/reconciliation-under-load.test.ts` |
+
+## 12. Console de demonstração
+
+Painel opcional para apresentar o sistema ao vivo. Ele não faz parte da API nem dos testes e não muda nada em `src/`.
+É uma página única em HTML, CSS e JS puros (`demo/index.html`), servida por um proxy Bun (`demo/server.ts`) que escuta
+só em `127.0.0.1:4000` e repassa `/api/1/*`, `/api/2/*` e `/api/3/*` para as instâncias 3001, 3002 e 3003. Uma
+instância que não responde vira 502 `{"error":"instance_unreachable"}`.
+
+```bash
+docker compose --profile cluster up -d --build
+bun run demo          # abra http://127.0.0.1:4000
+```
+
+O que mostra:
+
+- o ready das 3 instâncias, atualizado a cada 3 s;
+- a criação de uma wallet de 100,00;
+- duas BETs de 80,00 disparadas ao mesmo tempo nas instâncias 1 e 2: uma `PROCESSED` e outra `REJECTED`
+  `INSUFFICIENT_FUNDS`, saldo final 20,00;
+- o replay da primeira BET por outra instância e o conflito com a mesma chave e outro valor (409);
+- o ledger da wallet e a reconciliação (selo "consistente" ou "divergente");
+- as métricas lidas de `/metrics`;
+- a linha do tempo das requisições, com o `correlationId` de cada uma.
+
+O botão "Executar roteiro completo" roda tudo em sequência. Os valores monetários são tratados só como texto.
