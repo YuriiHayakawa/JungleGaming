@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://junglegaming.local/contracts/002/integration-events.schema.json",
+  "title": "IntegrationEvent (wager-events.fifo)",
+  "description": "Corpo das mensagens publicadas em wager-events.fifo: o envelope toJSON() gravado na outbox pela 001, sem alteração (enunciado §11; FR-022; 001/FR-047). Entrega ao menos uma vez; deduplicar por eventId; a ordem entre eventos de uma wallet não é garantida, ordenar saldo por walletVersion (I-31, I-32). Dinheiro sempre como MoneyProps (string com 2 casas).",
+  "oneOf": [
+    { "$ref": "#/$defs/WagerTransactionProcessed" },
+    { "$ref": "#/$defs/WagerTransactionRejected" },
+    { "$ref": "#/$defs/WalletBalanceChanged" },
+    { "$ref": "#/$defs/WagerTransactionPendingReference" }
+  ],
+  "$defs": {
+    "Money": {
+      "type": "object",
+      "required": ["amount", "currency"],
+      "properties": {
+        "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)\\.\\d{2}$" },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }
+      }
+    },
+    "Envelope": {
+      "type": "object",
+      "required": ["eventId", "eventType", "aggregateId", "correlationId", "occurredAt", "version", "data"],
+      "properties": {
+        "eventId": { "type": "string", "format": "uuid", "description": "UUIDv7; MessageDeduplicationId na fila (I-29)" },
+        "eventType": { "type": "string" },
+        "aggregateId": { "type": "string", "format": "uuid", "description": "walletId; MessageGroupId na fila (I-29, I-33)" },
+        "correlationId": { "type": "string", "maxLength": 128, "description": "HTTP: X-Correlation-Id ou gerado (I-53); fila: messageId (I-69); worker: correlation_id da pendente (I-69)" },
+        "causationId": { "type": "string", "maxLength": 128, "description": "Só em eventos de transações vindas da fila: messageId (I-69)" },
+        "occurredAt": { "type": "string", "format": "date-time" },
+        "version": { "type": "integer", "const": 1 },
+        "data": { "type": "object" }
+      }
+    },
+    "TransactionIds": {
+      "type": "object",
+      "required": ["transactionId", "providerId", "externalTransactionId", "walletId", "playerId", "roundId", "gameId", "kind", "money"],
+      "properties": {
+        "transactionId": { "type": "string", "format": "uuid" },
+        "providerId": { "type": "string" },
+        "externalTransactionId": { "type": "string" },
+        "walletId": { "type": "string", "format": "uuid" },
+        "playerId": { "type": "string" },
+        "roundId": { "type": "string" },
+        "gameId": { "type": "string" },
+        "kind": { "type": "string", "enum": ["BET", "WIN", "LOSS", "REFUND", "ROLLBACK"] },
+        "money": { "$ref": "#/$defs/Money" }
+      }
+    },
+    "WagerTransactionProcessed": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "properties": {
+            "eventType": { "const": "WagerTransactionProcessed" },
+            "data": {
+              "allOf": [
+                { "$ref": "#/$defs/TransactionIds" },
+                {
+                  "required": ["balance", "walletVersion"],
+                  "properties": {
+                    "referenceTransactionId": { "type": "string", "format": "uuid" },
+                    "balance": { "$ref": "#/$defs/Money" },
+                    "walletVersion": { "type": "integer", "minimum": 1 }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "WagerTransactionRejected": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "properties": {
+            "eventType": { "const": "WagerTransactionRejected" },
+            "data": {
+              "allOf": [
+                { "$ref": "#/$defs/TransactionIds" },
+                {
+                  "required": ["failureCode", "retryable", "balance"],
+                  "properties": {
+                    "failureCode": {
+                      "type": "string",
+                      "enum": ["INSUFFICIENT_FUNDS", "REVERSAL_WOULD_OVERDRAW", "BALANCE_LIMIT_EXCEEDED", "REFERENCE_NOT_FOUND", "REFERENCE_REJECTED", "REFERENCE_MISMATCH", "INVALID_REFERENCE_KIND", "ALREADY_REVERSED", "AMOUNT_MISMATCH", "CURRENCY_MISMATCH", "WALLET_PLAYER_MISMATCH"],
+                      "description": "REFERENCE_NOT_FOUND só vem do worker, por esgotamento (I-21, I-64)"
+                    },
+                    "retryable": { "type": "boolean", "const": false },
+                    "balance": { "$ref": "#/$defs/Money" }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "WalletBalanceChanged": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "properties": {
+            "eventType": { "const": "WalletBalanceChanged" },
+            "data": {
+              "type": "object",
+              "required": ["walletId", "transactionId", "direction", "money", "balanceBefore", "balanceAfter", "walletVersion"],
+              "properties": {
+                "walletId": { "type": "string", "format": "uuid" },
+                "transactionId": { "type": "string", "format": "uuid" },
+                "direction": { "type": "string", "enum": ["DEBIT", "CREDIT"] },
+                "money": { "$ref": "#/$defs/Money" },
+                "balanceBefore": { "$ref": "#/$defs/Money" },
+                "balanceAfter": { "$ref": "#/$defs/Money" },
+                "walletVersion": { "type": "integer", "minimum": 1, "description": "Para o consumidor ordenar eventos de saldo (I-32)" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "WagerTransactionPendingReference": {
+      "allOf": [
+        { "$ref": "#/$defs/Envelope" },
+        {
+          "properties": {
+            "eventType": { "const": "WagerTransactionPendingReference" },
+            "data": {
+              "allOf": [
+                { "$ref": "#/$defs/TransactionIds" },
+                {
+                  "required": ["referenceExternalTransactionId", "nextAttemptAt"],
+                  "properties": {
+                    "referenceExternalTransactionId": { "type": "string" },
+                    "nextAttemptAt": { "type": "string", "format": "date-time" }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

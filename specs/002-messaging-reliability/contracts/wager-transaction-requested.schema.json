@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://junglegaming.local/contracts/002/wager-transaction-requested.schema.json",
+  "title": "WagerTransactionRequested",
+  "description": "Corpo da mensagem em wager-transactions.fifo (enunciado §10; FR-001, FR-002). Campos desconhecidos são descartados (I-57). Qualquer violação é mensagem malformada ou payload inválido: erro permanente, DLQ direta (I-30, I-66, I-69). As regras cruzadas entre campos de data (referência por kind, zero só em LOSS, autorreferência) são as da submissão HTTP da 001 e estão listadas em x-cross-field-rules.",
+  "type": "object",
+  "required": ["messageId", "type", "occurredAt", "data"],
+  "properties": {
+    "messageId": {
+      "description": "Id da mensagem no provedor; chave da inbox com o consumer_name; vira correlationId e causationId (I-28, I-69). Mesmo conjunto do X-Correlation-Id (I-53).",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+    },
+    "type": {
+      "description": "Só WagerTransactionRequested é aceito; outro valor com envelope válido → UNSUPPORTED_MESSAGE_TYPE (I-66).",
+      "type": "string",
+      "const": "WagerTransactionRequested"
+    },
+    "occurredAt": {
+      "description": "Momento em que o provedor gerou a mensagem, ISO-8601. Não entra no payloadHash (I-25).",
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {
+      "type": "object",
+      "required": ["providerId", "externalTransactionId", "idempotencyKey", "playerId", "walletId", "roundId", "gameId", "kind", "money"],
+      "properties": {
+        "providerId": { "type": "string", "minLength": 1, "maxLength": 255, "not": { "const": "system" }, "description": "\"system\" é reservado (I-07)" },
+        "externalTransactionId": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "idempotencyKey": { "type": "string", "minLength": 1, "maxLength": 255, "description": "Faz o papel do header Idempotency-Key (I-23, I-48); não entra no payloadHash (I-25)" },
+        "playerId": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "walletId": { "type": "string", "format": "uuid", "description": "Normalizado para minúsculas (I-58)" },
+        "roundId": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "gameId": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "kind": { "type": "string", "enum": ["BET", "WIN", "LOSS", "REFUND", "ROLLBACK"], "description": "OPENING → OPENING_NOT_ALLOWED (I-08)" },
+        "money": {
+          "type": "object",
+          "required": ["amount", "currency"],
+          "properties": {
+            "amount": { "type": "string", "pattern": "^(0|[1-9]\\d*)(\\.\\d{1,2})?$", "description": "String decimal, até 9999999999999999.99 (I-01, I-03); número JSON é inválido" },
+            "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }
+          }
+        },
+        "referenceExternalTransactionId": { "type": "string", "minLength": 1, "maxLength": 255 }
+      }
+    }
+  },
+  "x-cross-field-rules": [
+    "BET não aceita referenceExternalTransactionId; REFUND e ROLLBACK exigem; WIN e LOSS aceitam opcional (I-13)",
+    "amount \"0.00\" só em LOSS (I-02)",
+    "referenceExternalTransactionId diferente de externalTransactionId (I-60)",
+    "amount ≤ 9999999999999999.99 (I-03)"
+  ],
+  "examples": [
+    {
+      "messageId": "msg-123",
+      "type": "WagerTransactionRequested",
+      "occurredAt": "2026-07-29T15:00:00.000Z",
+      "data": {
+        "providerId": "provider-a",
+        "externalTransactionId": "transaction-123",
+        "idempotencyKey": "provider-a:transaction-123",
+        "playerId": "0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1",
+        "walletId": "0192f291-27dd-7d3f-8071-5f8685deef37",
+        "roundId": "round-987",
+        "gameId": "fortune-chimp",
+        "kind": "BET",
+        "money": { "amount": "25.00", "currency": "BRL" }
+      }
+    }
+  ]
+}
