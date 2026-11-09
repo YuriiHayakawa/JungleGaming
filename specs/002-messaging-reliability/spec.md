@@ -13,7 +13,7 @@ transações PENDING_REFERENCE." (descrição completa, com problema, usuários,
 fora de escopo, fornecida em `/speckit-specify`)
 
 **Fontes normativas**: `docs/enunciado.md` (seções 3, 7.1, 10, 11, 12 e 13), `docs/interpretacoes.md` (ids I-xx
-citados nos requisitos, em especial I-21, I-22, I-27 a I-34, I-40, I-49 e I-60 a I-69) e
+citados nos requisitos, em especial I-21, I-22, I-27 a I-34, I-40, I-49 e I-60 a I-73) e
 `.specify/memory/constitution.md` v1.0.1. Em caso de conflito, prevalece a ordem do Princípio I da constitution.
 
 **Depende de**: feature `001-wagering-transaction-core` (implementada): wallets, ledger, submissão de transações com
@@ -98,6 +98,10 @@ número de recebimentos e a ausência de efeito parcial.
      inbox.
 4. **Given** a espera pelo lock da wallet estoura, **When** a mensagem é processada, **Then** o caso é tratado como
    transitório: a mensagem não é confirmada e volta depois (I-30, I-51).
+4a. **Given** um erro inesperado (quebra de invariante ou erro não classificado) em toda entrega de uma mensagem,
+   **When** ela é recebida pela 5ª vez, **Then** a aplicação a envia à DLQ com `errorCode` `INTERNAL_ERROR` e
+   `errorClass` `unexpected` e só então a apaga da fila principal; nas 4 entregas anteriores ela voltou com espera
+   crescente, sem efeito parcial e sem FAILED (I-61, I-71).
 5. **Given** uma transação gravada como FAILED pelo reprocessamento (I-61), **When** chega pela fila uma mensagem com a
    mesma chave e o mesmo conteúdo, **Then** é um replay de FAILED: a mensagem é confirmada, sem efeito e sem evento
    (I-62).
@@ -153,8 +157,9 @@ instâncias ao mesmo tempo.
 **Acceptance Scenarios**:
 
 1. **Given** um REFUND PENDING_REFERENCE de uma BET que ainda não chegou, **When** a BET chega e é aplicada, **Then** o
-   REFUND é reavaliado logo em seguida (sem esperar a próxima tentativa agendada), fica PROCESSED com um lançamento
-   CREDIT e registra `WalletBalanceChanged` e `WagerTransactionProcessed` (I-21, I-63).
+   REFUND é antecipado para a próxima varredura do reprocessamento (cerca de 1 s, sem esperar a tentativa agendada),
+   fica PROCESSED com um lançamento CREDIT e registra `WalletBalanceChanged` e `WagerTransactionProcessed` (I-21, I-63,
+   I-73).
 2. **Given** um REFUND PENDING_REFERENCE, **When** a BET referenciada chega e é REJECTED, **Then** o REFUND fica
    REJECTED com `REFERENCE_REJECTED` e registra `WagerTransactionRejected` (I-15).
 3. **Given** um REFUND PENDING_REFERENCE cuja referência nunca chega, **When** as 10 tentativas se esgotam (cerca de
@@ -280,7 +285,12 @@ o contador correspondente foi registrado.
 - **Pendente cuja referência já foi revertida por outra transação** no meio tempo: REJECTED com `ALREADY_REVERSED`
   (I-16).
 - **Teto de 10 min atingido antes das 10 tentativas** (ex.: tentativas atrasadas por indisponibilidade): REJECTED com
-  `REFERENCE_NOT_FOUND` na próxima avaliação (I-64).
+  `REFERENCE_NOT_FOUND` na próxima avaliação, se a referência continuar ausente ou pendente (I-64, I-72).
+- **Referência que chega exatamente antes da última tentativa** (ou antes da avaliação que atinge o teto): a última
+  avaliação relê a referência primeiro e resolve normalmente (PROCESSED pelas regras ou `REFERENCE_REJECTED`), sem
+  `REFERENCE_NOT_FOUND` (I-72).
+- **Erro inesperado no consumidor** em toda entrega: volta com espera crescente e, no 5º recebimento, a aplicação o
+  envia à DLQ com `INTERNAL_ERROR`/`unexpected`; o redrive é só rede de segurança (I-71).
 - **Indisponibilidade durante uma tentativa de reprocessamento**: a tentativa é desfeita sem efeito e não consome o
   limite de tentativas (Assumptions).
 - **Referência que chega depois do `REFERENCE_NOT_FOUND`**: a pendente não é reaberta (I-21).
@@ -322,6 +332,10 @@ o contador correspondente foi registrado.
 - **FR-009**: Erro transitório (banco indisponível, falha de conexão, espera de lock esgotada, deadlock ou falha de
   serialização depois das repetições internas, timeout) NÃO DEVE confirmar a mensagem; ela DEVE voltar a ficar visível
   com espera crescente e, depois de 5 recebimentos sem sucesso, ir para a DLQ (I-30, I-34, I-51).
+- **FR-009a**: Erro inesperado (quebra de invariante ou erro não classificado) DEVE ser tratado como transitório, com
+  as mesmas novas tentativas e espera crescente; no 5º recebimento a aplicação DEVE enviar a mensagem à DLQ com
+  `errorCode` `INTERNAL_ERROR` e `errorClass` `unexpected` e só então apagá-la da fila principal. O redrive pelo limite
+  de recebimentos continua como rede de segurança (I-61, I-71).
 - **FR-010**: Erro permanente DEVE levar a mensagem direto para a DLQ, no primeiro recebimento, sem novas tentativas:
   corpo que não é JSON ou envelope inválido; `data` inválido; `kind` OPENING; `providerId` "system"; wallet inexistente;
   `type` diferente de `WagerTransactionRequested`; mesmo `messageId` com hash diferente; conflito de idempotência (mesma
@@ -366,10 +380,13 @@ o contador correspondente foi registrado.
   hora atualizadas (I-11); referência REJECTED ou FAILED → REJECTED `REFERENCE_REJECTED`; referência inconsistente →
   o código da consistência; referência PROCESSED → seguem `ALREADY_REVERSED` e as regras de saldo (I-14 a I-18, I-44,
   I-54).
-- **FR-025**: Esgotadas as 10 tentativas, ou atingido o teto de 10 min contado da criação, o que vier primeiro, a
-  transação DEVE ficar REJECTED com `REFERENCE_NOT_FOUND` e registrar `WagerTransactionRejected` (I-21, I-64).
-- **FR-026**: Ao processar qualquer transação, as pendentes que a referenciam DEVEM ser reavaliadas logo depois do
-  commit, sem esperar a hora agendada, por ordem de criação, cada uma separadamente, sob o lock da wallet (I-21, I-63).
+- **FR-025**: Na avaliação que esgota as 10 tentativas, ou que acontece depois do teto de 10 min contado da criação, a
+  referência DEVE ser reavaliada primeiro: aplicada ou rejeitada, a pendente resolve normalmente (FR-024); só se a
+  referência continuar ausente ou pendente a transação DEVE ficar REJECTED com `REFERENCE_NOT_FOUND` e registrar
+  `WagerTransactionRejected` (I-21, I-64, I-72).
+- **FR-026**: Ao processar qualquer transação (PROCESSED ou REJECTED), as pendentes que a referenciam DEVEM ter a próxima
+  tentativa puxada para agora, na mesma unidade atômica; quem as processa é a próxima varredura do reprocessamento
+  (cerca de 1 s, configurável), por ordem de criação, cada uma separadamente, sob o lock da wallet (I-21, I-63, I-73).
 - **FR-027**: A conclusão de uma pendente DEVE gerar lançamento e eventos como qualquer outra transação: na mesma
   unidade atômica, mudança de status, saldo, ledger e outbox (001/FR-040, 001/FR-045).
 - **FR-028**: O reprocessamento DEVE ser correto com várias instâncias ao mesmo tempo: cada pendente é concluída no
@@ -405,10 +422,14 @@ o contador correspondente foi registrado.
   o estado atual gravado: PROCESSED → 200, REJECTED → 422 com `failureCode`, ainda pendente → 202, FAILED → 500 com
   `retryable` false (I-62), sempre com o saldo observado na conclusão. A conclusão reescreve o saldo observado e a
   referência interna resolvida (I-67). Pela fila, todos esses replays são confirmados sem efeito (I-26, I-62).
-- **FR-040**: Toda mensagem que a aplicação envia à DLQ por erro permanente DEVE levar `errorCode` (estável, da
-  taxonomia ou do motivo da classificação) e `errorClass` (`permanent`) como atributos, para o diagnóstico e o
-  redrive; a mensagem só é removida da fila principal depois de aceita pela DLQ (I-30, I-68). As mensagens que chegam à
-  DLQ pelo limite de recebimentos (transitórias) são movidas pela própria fila, sem esses atributos.
+- **FR-040**: Toda mensagem que a aplicação envia à DLQ DEVE levar `errorCode` e `errorClass` como atributos, para o
+  diagnóstico e o redrive: `errorClass` `permanent` para os erros permanentes (FR-010) e `unexpected` para o erro
+  inesperado no 5º recebimento (FR-009a). O `errorCode` vem da taxonomia §7 (`VALIDATION_ERROR`,
+  `OPENING_NOT_ALLOWED`, `WALLET_NOT_FOUND`, `IDEMPOTENCY_CONFLICT`, `INTERNAL_ERROR`) ou da tabela de códigos
+  exclusivos de DLQ (`MALFORMED_MESSAGE`, `UNSUPPORTED_MESSAGE_TYPE`, `INBOX_PAYLOAD_MISMATCH`), que nunca são
+  `failureCode` nem código de resposta HTTP. A mensagem só é removida da fila principal depois de aceita pela DLQ
+  (I-30, I-68, I-70, I-71). As que chegam à DLQ pelo redrive (rede de segurança) são movidas pela própria fila, sem
+  esses atributos.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -434,7 +455,8 @@ o contador correspondente foi registrado.
 - **SC-003**: Com 2 ou mais publicadores sobre a mesma outbox, 100% dos eventos são publicados ao menos uma vez e, em até
   60 s depois que todos os publicadores restantes estão ativos, nenhum evento continua pendente.
 - **SC-004**: 100% das mensagens com erro permanente chegam à DLQ com exatamente 1 recebimento; 100% das mensagens com
-  erro transitório persistente chegam à DLQ com exatamente 5 recebimentos.
+  erro transitório persistente chegam à DLQ com exatamente 5 recebimentos; 100% das mensagens com erro inesperado
+  persistente chegam à DLQ no 5º recebimento, enviadas pela aplicação com `errorCode` `INTERNAL_ERROR` (I-71).
 - **SC-005**: Uma pendente cuja referência é aplicada é concluída em até 5 s depois da aplicação da referência; uma
   pendente sem referência termina REJECTED `REFERENCE_NOT_FOUND` em até 10 min da criação (teto), e normalmente depois da
   10ª tentativa, cerca de 7 min com a configuração padrão.
@@ -474,6 +496,10 @@ são normativos nesta spec:
 - **I-67**: replay depois da resolução de uma PENDING_REFERENCE devolve o estado atual gravado (FR-039).
 - **I-68**: conflito de idempotência pela fila é erro permanente, DLQ direta, sem inbox, com `errorCode` e `errorClass`
   (FR-010, FR-040).
+- **I-70**: códigos exclusivos de DLQ e `errorCode`/`errorClass` em toda mensagem enviada pela aplicação (FR-040).
+- **I-71**: erro inesperado no consumidor é transitório e vai à DLQ pela aplicação no 5º recebimento (FR-009a, FR-040).
+- **I-72**: na última tentativa a referência é reavaliada antes do `REFERENCE_NOT_FOUND` (FR-025).
+- **I-73**: a antecipação só puxa a próxima tentativa das dependentes; a próxima varredura as processa (FR-026).
 - **I-69**: `messageId` como `correlationId` e `causationId` na fila, validado no envelope; eventos do reprocessamento
   com o `correlation_id` da pendente (FR-002, FR-038).
 

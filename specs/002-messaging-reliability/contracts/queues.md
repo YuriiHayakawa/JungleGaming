@@ -31,17 +31,19 @@ Corpo: [wager-transaction-requested.schema.json](wager-transaction-requested.sch
 | duplicata (mesmo `messageId` e mesmo hash) | `DeleteMessage` | já existia | nenhum |
 | replay pela idempotência (inclusive cruzado com HTTP; inclusive de FAILED, I-62) | `DeleteMessage` | gravada, apontando a transação existente | nenhum |
 | transitória | sem delete; `ChangeMessageVisibility` com espera crescente; DLQ pelo redrive depois de 5 recebimentos | não | nenhum |
+| inesperada (I-71) | como a transitória até o 4º recebimento; no 5º, `SendMessage` à DLQ com `INTERNAL_ERROR`/`unexpected` e, só depois, `DeleteMessage` | não | nenhum |
 | permanente | `SendMessage` à DLQ com atributos e, só depois, `DeleteMessage` | não | nenhum |
 
 ## DLQ: atributos das mensagens enviadas pela aplicação
 
 Mensagens que chegam à DLQ pelo redrive (transitórias) mantêm o corpo e os atributos originais, sem os atributos
-abaixo. As enviadas pela aplicação (permanentes) repetem o corpo original e levam (FR-040, I-68):
+abaixo (rede de segurança). As enviadas pela aplicação (permanentes no 1º recebimento; erro inesperado no 5º, I-71)
+repetem o corpo original e levam (FR-040, I-68, I-70):
 
 | Atributo (`String`) | Valor |
 |---------------------|-------|
 | `errorCode` | código da tabela abaixo |
-| `errorClass` | `permanent` |
+| `errorClass` | `permanent` (erros permanentes do I-30) ou `unexpected` (erro inesperado, I-71) |
 | `receiveCount` | `ApproximateReceiveCount` no momento da classificação |
 | `consumer` | `CONSUMER_NAME` |
 
@@ -49,16 +51,18 @@ abaixo. As enviadas pela aplicação (permanentes) repetem o corpo original e le
 
 | Código | Quando | Origem |
 |--------|--------|--------|
-| `MALFORMED_MESSAGE` | corpo não é JSON; envelope sem `messageId`, `type`, `occurredAt` ou `data`; `messageId` fora de `^[A-Za-z0-9._:-]{1,128}$`; `occurredAt` não ISO-8601 | I-30, I-69 (novo; registro pendente, plan item 1) |
-| `UNSUPPORTED_MESSAGE_TYPE` | envelope válido com `type` diferente de `WagerTransactionRequested` | I-66 (novo; registro pendente) |
+| `MALFORMED_MESSAGE` | corpo não é JSON; envelope sem `messageId`, `type`, `occurredAt` ou `data`; `messageId` fora de `^[A-Za-z0-9._:-]{1,128}$`; `occurredAt` não ISO-8601 | I-30, I-69, I-70 (exclusivo de DLQ) |
+| `UNSUPPORTED_MESSAGE_TYPE` | envelope válido com `type` diferente de `WagerTransactionRequested` | I-66, I-70 (exclusivo de DLQ) |
 | `VALIDATION_ERROR` | `data` viola as regras de payload da 001 (formatos, referência por kind, zero só em LOSS, autorreferência, "system") | I-30, I-60, taxonomia §7 |
 | `OPENING_NOT_ALLOWED` | `kind` OPENING | I-08, taxonomia §7 |
 | `WALLET_NOT_FOUND` | wallet inexistente | I-20, I-30, taxonomia §7 |
-| `INBOX_PAYLOAD_MISMATCH` | mesmo `messageId` já registrado na inbox com outro `payloadHash` | I-28 (novo; registro pendente) |
+| `INBOX_PAYLOAD_MISMATCH` | mesmo `messageId` já registrado na inbox com outro `payloadHash` | I-28, I-70 (exclusivo de DLQ) |
 | `IDEMPOTENCY_CONFLICT` | mesma chave do mesmo provedor com conteúdo diferente, ou mesmo id externo com outra chave | I-68, taxonomia §7 |
-| `INTERNAL_ERROR` | quebra de invariante ou erro não classificado; o consumidor nunca grava FAILED | I-22, I-61 (leitura pendente, plan item 2) |
+| `INTERNAL_ERROR` | erro inesperado (quebra de invariante ou erro não classificado) que persistiu até o 5º recebimento; nas entregas anteriores foi tratado como transitório; `errorClass` `unexpected`; o consumidor nunca grava FAILED | I-61, I-71, taxonomia §7 |
 
-Os códigos são só de atributo da DLQ: nunca vão para `failure_code` nem para resposta HTTP.
+Na DLQ, nenhum desses valores vai para `failure_code` nem para resposta HTTP. `MALFORMED_MESSAGE`, `UNSUPPORTED_MESSAGE_TYPE` e
+`INBOX_PAYLOAD_MISMATCH` são exclusivos de DLQ, na tabela própria da taxonomia §7 (I-70); os demais são da tabela
+principal da §7.
 
 ## Saída: `wager-events.fifo`
 

@@ -7,11 +7,98 @@ numeração continua a da feature 001 (R-01 a R-19 seguem valendo); esta feature
 
 ## 0. Spike S-12 (obrigatório)
 
-> **PENDENTE.** É a primeira task da implementação e bloqueia toda task que toca SQS. O resultado (ambiente, comandos,
-> medições e status por item) é registrado nesta seção, no formato da research da 001 (§0), antes de seguir. Se algum
-> item reprovar, vale a alternativa registrada; se a alternativa também falhar, o plan volta para revisão.
+> **EXECUTADO em 2026-11-08.** Resultado: **o LocalStack 2026.10.2 reprovou no S-12.1 (exige token)**; a alternativa
+> registrada, **MiniStack 1.5.32, foi adotada** e aprovou todos os itens de fila (S-12.1 a S-12.7 e S-12.9).
+> **S-12.8 reprovou pelo critério literal**: com `enableShutdownHooks()` do Nest, o processo drena mas não sai com 0
+> (trava como PID 1, ou sai com 143 com `--init`); a alternativa medida (handler próprio de SIGTERM que chama
+> `app.close()` e `process.exit(0)`) sai com 0. As mudanças que isso pede no plan, na data-model e nas tasks estão em
+> [0.4](#04-mudanças-propostas-não-aplicadas) e **não foram aplicadas** (aguardam o usuário).
 
-Código descartável em `spike/s12/` (o `spike/` da 001 continua no repositório até o T121).
+Código descartável em `spike/s12/` (o `spike/` da 001, na raiz, não foi tocado).
+
+### 0.1 Ambiente e comandos
+
+- **Máquina**: Windows 10 Pro 10.0.19045, Docker 29.5.3, Bun 1.4.4 (o mesmo da research da 001, §0.1).
+- **Emuladores**:
+  - `localstack/localstack:2026.10.2`, digest `sha256:0e95fa70a58fff808cdc4c8deea8cf56a247cdad403c082e33ec37924987e0c3`
+    (build 2026-10-22, git `b71ba515`);
+  - `ministackorg/ministack:1.5.32`, digest `sha256:c3afdc0f5a5147477b0634cbe2d2ebb032079989a52c8a1e1e59aea7413feb78`
+    (68 MB, Python 3.13.17, gateway na porta 4566; no spike, mapeado para 4567 no host). Pronto em 378 ms depois de um
+    restart; 24 MiB de memória em repouso. Atende `/_localstack/health` (compatível) com SQS `available`.
+- **Container Linux do S-12.8**: `oven/bun:1.4.4`, digest
+  `sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d` (o mesmo da 001).
+- **SDK**: `@aws-sdk/client-sqs` 3.1156.0 instalado com versão exata em `spike/s12/package.json` (25 pacotes).
+
+Comandos executados:
+
+```bash
+docker pull localstack/localstack:2026.10.2
+docker compose -f spike/s12/docker-compose.yml up -d localstack       # S-12.1: sai com 55 (licença)
+docker compose -f spike/s12/docker-compose.yml --profile ministack up -d ministack
+cd spike/s12 && bun install
+SQS_ENDPOINT=http://localhost:4567 bun test --timeout 120000         # test/s12.test.ts (10) + test/s12-extra.test.ts (5)
+# S-12.8 (Git Bash, MSYS_NO_PATHCONV=1), três variantes:
+docker run -d        --name s -v C:/DEV/projetos/JungleGaming:/app -w /app oven/bun:1.4.4 bun spike/s12/src/sigterm-app.ts
+docker run -d --init --name s -v C:/DEV/projetos/JungleGaming:/app -w /app oven/bun:1.4.4 bun spike/s12/src/sigterm-app.ts
+docker run -d [--init] --name s -v ... oven/bun:1.4.4 bun spike/s12/src/sigterm-app-explicit.ts
+docker kill --signal SIGTERM s && docker wait s
+```
+
+### 0.2 Resultados
+
+| Id | Resultado medido | Status |
+|----|------------------|--------|
+| S-12.1 | **LocalStack 2026.10.2**: sai com código 55 em segundos: "License activation failed! No credentials were found in the environment. Please set the LOCALSTACK_AUTH_TOKEN variable". **MiniStack 1.5.32**: sobe sem token e sem variável nenhuma; `CreateQueue` e `ListQueues` com credenciais `test`/`test` funcionam | LocalStack **reprovado**; MiniStack **aprovado** (adotado, I-43) |
+| S-12.2 | sem `MessageGroupId` → `MissingParameter: The request must contain the parameter MessageGroupId`; sem `MessageDeduplicationId` (com `ContentBasedDeduplication=false`) → `InvalidParameterValue: The queue should either have ContentBasedDeduplication enabled or MessageDeduplicationId provided explicitly` | **Aprovado** |
+| S-12.3 | dois envios com o mesmo `MessageDeduplicationId` devolvem o **mesmo** `MessageId` e só o primeiro é recebido (`payload-1`, e `payload-3`, de outro id); um reenvio com o mesmo id **depois** de a mensagem ser recebida e apagada também é descartado (0 mensagens) | **Aprovado**: deduplicação aplicada de verdade |
+| S-12.4 | `ApproximateReceiveCount` na principal: 1, 2, 3, 4, 5; a 6ª tentativa de recebimento não devolve nada e a mensagem aparece na DLQ, com corpo, atributo de mensagem e `MessageGroupId` preservados e `ApproximateReceiveCount` 6; 7,5 s com visibilidade de 1 s | **Aprovado**: redrive aplicado de verdade, no mesmo momento que o SQS (ao tentar a 6ª entrega) |
+| S-12.5 | visibilidade 0 → re-recebida em 3 ms; visibilidade 3 s → nada antes de 1 s, re-recebida em 3011 ms; `ApproximateReceiveCount` 1, 2, 3; `VisibilityTimeout` no próprio receive (1 s numa fila de 30 s) → volta em 1004 ms | **Aprovado** |
+| S-12.6 | com `g1-a` invisível, o receive seguinte devolve só `g2-a` (nada do grupo G1); num receive de 10, as mensagens de um grupo vêm em ordem (`g-1` … `g-4`) | **Aprovado**: bloqueio por grupo aplicado de verdade |
+| S-12.7 | long polling de 20 s abortado aos 300 ms → `AbortError` em 302 ms; long polling de 10 s volta em 605 ms quando a mensagem chega aos 500 ms; atributos `errorCode`/`errorClass` de string ida e volta; endpoint fechado → `Error` com `code` `ECONNREFUSED` em 3 ms, sem travar; `ApproximateNumberOfMessages` 1 e `...NotVisible` 1 conferem com o estado | **Aprovado** |
+| S-12.8 | **Variante pedida** (`enableShutdownHooks()` do Nest), como PID 1: o `onApplicationShutdown` roda e drena (801 ms), mas o processo **não sai** (a espera de 180 s estourou; container vivo). O Nest reemite o sinal para o próprio processo depois dos hooks, e o Linux ignora sinal sem handler no PID 1. Com `--init` (tini): drena e sai com **143** (terminado pelo sinal reemitido) em 1128 ms. **Alternativa** (handler próprio: `SIGTERM`/`SIGINT` → `app.close()` → `process.exit(0)`): drena (800 ms) e sai com **0** em 1157 ms como PID 1 e em 1141 ms com `--init` | **Reprovado** pelo critério (saída 0) com `enableShutdownHooks`; **alternativa aprovada** |
+| S-12.9 | processo filho recebeu a mensagem (`count=1`), morto com SIGKILL (saída 137): a mensagem voltou em 2010 ms (visibilidade de 2 s) com `ApproximateReceiveCount` 2 | **Aprovado** |
+
+### 0.3 Deduplicação e redrive: aplicados de verdade ou só aceitos?
+
+Medido, não presumido. O MiniStack 1.5.32 **aplica** as três semânticas que o plan usa:
+
+- **Deduplicação FIFO**: descarta o segundo envio com o mesmo `MessageDeduplicationId`, inclusive depois de a primeira
+  mensagem ser apagada (comportamento da janela de 5 min do SQS), e devolve o mesmo `MessageId` ao remetente.
+- **Redrive para a DLQ**: move a mensagem quando a 6ª entrega seria feita com `maxReceiveCount` 5, preservando corpo,
+  atributos e grupo.
+- **Bloqueio por grupo**: não entrega outra mensagem do grupo enquanto uma está invisível.
+
+A janela de 5 min em si (expiração da deduplicação depois de 5 min) não foi medida; nenhum requisito depende dela.
+Também não foi medido o LocalStack nesses pontos, porque ele não sobe sem token.
+
+### 0.4 Mudanças propostas (não aplicadas)
+
+Pedem aprovação do usuário antes de entrar no plan, na data-model e nas tasks:
+
+1. **Emulador = MiniStack 1.5.32** (S-12.1):
+   - **plan.md**: Technical Context ("Messaging" e "Testing"), Constitution Check (linha Stack), Deploy local e
+     Matriz: trocar "LocalStack" pelo MiniStack fixado; serviço do Compose com nome neutro `sqs`
+     (`ministackorg/ministack:1.5.32`), porta 4566, healthcheck por Python (a imagem não tem `curl`, `wget` nem `aws`
+     CLI), por exemplo `python -c "import urllib.request; urllib.request.urlopen('http://localhost:4566/_localstack/health')"`.
+   - **quickstart.md**: os exemplos com `awslocal` não funcionam (não existe na imagem); usar o `aws` CLI do host com
+     `--endpoint-url http://localhost:4566` ou um script `bun scripts/sqs-send.ts`.
+   - **data-model.md**: nada muda.
+   - **tasks**: a task do spike fica concluída por este registro; a task do Compose usa a imagem do MiniStack.
+2. **Término gracioso** (S-12.8):
+   - **plan.md** (Encerramento gracioso, R-28, R-30): trocar `app.enableShutdownHooks()` do `src/main.ts` por um handler
+     próprio de `SIGTERM`/`SIGINT` que chama `app.close()` (dispara os mesmos `onApplicationShutdown`, inclusive o
+     drain do `WorkerRegistry`) e depois `process.exit(0)`, com proteção contra sinal repetido; opcionalmente
+     `init: true` no Compose (com o handler próprio, não é necessário: saída 0 como PID 1). Os hooks deixam de receber o
+     nome do sinal (`signal` vem `undefined` via `app.close()`); nenhum código do plan depende dele.
+   - **Impacto na 001**: o `src/main.ts` atual tem o mesmo problema. Hoje, no container do Compose (`bun src/main.ts`
+     como PID 1), um `docker compose stop` drena e depois espera o `SIGKILL` do Docker, saindo com 137. A research da
+     001 (S-10) mediu saída 0 em Linux com instâncias filhas do `bun test`, não como PID 1. A correção entra como task
+     desta feature.
+   - **tasks**: uma task para o handler de sinal no `main.ts`, com teste em container (R-30) conferindo saída 0 como
+     PID 1.
+   - **data-model.md**: nada muda.
+
+### 0.5 Critérios de aprovação (definidos no plan, antes da execução)
 
 | Id | O que validar | Critério de aprovação | Alternativa |
 |----|---------------|-----------------------|-------------|
@@ -25,16 +112,15 @@ Código descartável em `spike/s12/` (o `spike/` da 001 continua no repositório
 | S-12.8 | SIGTERM em container Linux | instância `oven/bun:1.4.4` em container com o handler do Nest; `docker kill --signal SIGTERM` → `onApplicationShutdown` roda e o processo sai com 0 dentro do prazo | — (S-10 da 001 já mostrou saída 0 em Linux); se falhar, revisar o plan |
 | S-12.9 | SIGKILL no meio de uma mensagem | processo morto com mensagem recebida e não apagada → ela volta depois da visibilidade, com `ApproximateReceiveCount` 2 | — (comportamento padrão do SQS) |
 
-Comandos previstos (a confirmar na execução): `docker compose -f spike/s12/docker-compose.yml up -d --wait`,
-`bun test` dentro de `spike/s12/`, e `docker run` do S-12.8.
+A tabela acima é a de critérios, definida no plan antes da execução; os resultados estão em [0.2](#02-resultados).
 
 ## 1. Versões
 
 | Pacote / imagem | Versão | Publicada em | Observação |
 |-----------------|--------|--------------|------------|
 | `@aws-sdk/client-sqs` | 3.1156.0 | 2026-10-22 | estável mais recente com 14 dias ou mais em 2026-11-08 (critério da 001); `latest` = 3.1164.0 (2026-11-06) |
-| `localstack/localstack` | 2026.10.2 | 2026-10-22 | tag de versão, nunca `latest`; sujeita ao S-12.1 |
-| `ministackorg/ministack` | 1.5.32 | 2026-10-23 | alternativa do I-43 |
+| `localstack/localstack` | 2026.10.2 | 2026-10-22 | **reprovado no S-12.1**: exige `LOCALSTACK_AUTH_TOKEN` |
+| `ministackorg/ministack` | 1.5.32 | 2026-10-23 | **adotado** (I-43): aprovado no S-12; troca no plan pendente de aprovação (§0.4) |
 
 As demais versões são as da 001 (research da 001, §1), sem troca.
 
@@ -90,12 +176,13 @@ As demais versões são as da 001 (research da 001, §1), sem troca.
   | wallet inexistente (I-20) | permanente `WALLET_NOT_FOUND` | idem |
   | mesmo `messageId`, hash diferente (I-28) | permanente `INBOX_PAYLOAD_MISMATCH` | idem |
   | conflito de idempotência (I-68) | permanente `IDEMPOTENCY_CONFLICT`, sem inbox | idem |
-  | quebra de invariante ou erro não classificado (I-22, I-61) | permanente `INTERNAL_ERROR` | idem; nunca grava FAILED |
+  | quebra de invariante ou erro não classificado (I-61, I-71) | inesperado: transitório até o 4º recebimento | no 5º recebimento, DLQ com `INTERNAL_ERROR` e `errorClass` `unexpected`, depois delete; nunca grava FAILED |
 
   O envio à DLQ repete o corpo original, o `MessageGroupId`, usa o `messageId` como `MessageDeduplicationId` e leva os
-  atributos `errorCode`, `errorClass` (`permanent`), `receiveCount` e `consumer` (contracts/queues.md). Só depois do
+  atributos `errorCode`, `errorClass` (`permanent` ou `unexpected`, I-70, I-71), `receiveCount` e `consumer`
+  (contracts/queues.md). Só depois do
   envio aceito a mensagem é apagada da fila principal (FR-040).
-- **Rationale**: I-30, I-61, I-66, I-68; enviar antes de apagar garante que nada se perca se o processo morrer entre os
+- **Rationale**: I-30, I-61, I-66, I-68, I-70, I-71; enviar antes de apagar garante que nada se perca se o processo morrer entre os
   dois (a mensagem volta, é reclassificada e reenviada; a deduplicação da DLQ absorve dentro de 5 min).
 - **Alternatives**: deixar todo permanente cair no redrive (rejeitado: 5 retries inúteis bloqueando o grupo da wallet,
   e sem atributos de diagnóstico); apagar antes de enviar (rejeitado: perda na queda entre os dois).
@@ -191,8 +278,8 @@ As demais versões são as da 001 (research da 001, §1), sem troca.
   - `after_pending_resolution_before_commit`: worker, antes do commit da reavaliação; modo padrão lança
     `FailpointError`; modo `invariant_violation` lança um erro com SQLSTATE `P0001` (classificado como `invariant`),
     para provar o FAILED (FR-029).
-- **Rationale**: I-40; testes de queda determinísticos sem mock (constitution VII). O terceiro está em Pendências do
-  plan, item 5.
+- **Rationale**: I-40; testes de queda determinísticos sem mock (constitution VII). O terceiro foi aceito pelo usuário
+  em 2026-11-08 (plan, Pendências de decisão, item 5).
 - **Alternatives**: matar o processo por sinal em momento aleatório (rejeitado para esses cenários: não determinístico;
   o SIGKILL aleatório fica no teste de carga, SC-006).
 
@@ -246,6 +333,6 @@ As demais versões são as da 001 (research da 001, §1), sem troca.
 
 ## 3. Pendências
 
-As leituras de interpretação deste plan estão em [plan.md, Pendências de decisão](plan.md#pendências-de-decisão) e
-precisam ser registradas em `docs/interpretacoes.md` antes do implement. O spike S-12 (§0) está pendente e é a primeira
-task da implementação.
+As leituras de interpretação deste plan foram registradas como I-70 a I-73 em 2026-11-08 ([plan.md, Pendências de
+decisão](plan.md#pendências-de-decisão)). O resultado do spike S-12 está no §0.
+

@@ -66,8 +66,8 @@ Serviço de domínio puro (R-25), configurado com `maxAttempts` (10), `ttlMs` (6
 - Sem jitter, a sequência de esperas é 5, 10, 20, 40, 60, 60, 60, 60, 60, 60 s: a 10ª tentativa acontece 435 s depois da
   criação, e é ela que, ainda sem referência, rejeita com `REFERENCE_NOT_FOUND` (I-64).
 - Só conta como tentativa a avaliação concluída com a referência ausente ou pendente; falha de infraestrutura não conta
-  (Assumptions da spec). O esgotamento só rejeita quando a referência ainda está ausente ou pendente naquela avaliação
-  (plan, Pendências, item 3).
+  (Assumptions da spec). O esgotamento só é consultado depois de a referência ser relida e avaliada: aplicada ou
+  rejeitada, a pendente resolve normalmente; `REFERENCE_NOT_FOUND` só se ela continuar ausente ou pendente (I-72).
 
 ### RandomSource (`platform/random/random-source.port.ts`)
 
@@ -81,11 +81,15 @@ passam a ser usados pelo publicador (I-31, I-65).
 
 ### Códigos de DLQ
 
-Atributo `errorCode` das mensagens enviadas pela aplicação à DLQ (FR-040, I-68). Lista completa em
-[contracts/queues.md](contracts/queues.md): `MALFORMED_MESSAGE`, `UNSUPPORTED_MESSAGE_TYPE`, `VALIDATION_ERROR`,
-`OPENING_NOT_ALLOWED`, `WALLET_NOT_FOUND`, `INBOX_PAYLOAD_MISMATCH`, `IDEMPOTENCY_CONFLICT`, `INTERNAL_ERROR`. Os três
-primeiros novos ainda precisam ser registrados ao lado da taxonomia §7 (plan, Pendências, item 1). Nunca vão para
-`failure_code`.
+Atributos `errorCode` e `errorClass` de toda mensagem enviada pela aplicação à DLQ (FR-040, I-68, I-70, I-71). Lista
+completa em [contracts/queues.md](contracts/queues.md):
+
+- `errorClass` `permanent`: `MALFORMED_MESSAGE`, `UNSUPPORTED_MESSAGE_TYPE`, `VALIDATION_ERROR`, `OPENING_NOT_ALLOWED`,
+  `WALLET_NOT_FOUND`, `INBOX_PAYLOAD_MISMATCH`, `IDEMPOTENCY_CONFLICT`;
+- `errorClass` `unexpected`: `INTERNAL_ERROR`, enviado no 5º recebimento de um erro inesperado (I-71).
+
+`MALFORMED_MESSAGE`, `UNSUPPORTED_MESSAGE_TYPE` e `INBOX_PAYLOAD_MISMATCH` são códigos exclusivos de DLQ, na tabela
+própria da §7 (I-70). Nenhum desses valores vai para `failure_code` nem para `error.code` HTTP.
 
 ## 2. Schema PostgreSQL
 
@@ -214,9 +218,11 @@ Replay pelo caminho rápido (fora do lock): transação mínima só com o `INSER
    failure_code = 'INTERNAL_ERROR', next_reference_attempt_at = NULL, updated_at = ? WHERE id = ? AND status =
    'PENDING_REFERENCE'`; `COMMIT` (I-22, I-61). Sem evento.
 
-### 3.4 Antecipação (FR-026, I-21, I-63)
+### 3.4 Antecipação (FR-026, I-21, I-63, I-73)
 
-Na mesma transação que deixa X PROCESSED ou REJECTED (submit, consumidor ou worker), depois do lock da wallet de X:
+Na mesma transação que deixa X PROCESSED ou REJECTED (submit, consumidor ou worker), depois do lock da wallet de X. Só
+puxa a próxima tentativa das dependentes; quem as processa é a próxima varredura do worker (§3.3), na ordem de lock
+wallet primeiro (I-73):
 
 ```sql
 UPDATE wager_transactions

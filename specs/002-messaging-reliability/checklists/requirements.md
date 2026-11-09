@@ -41,3 +41,6 @@
   requisitos afetados foram ajustados: FR-002 (formato do `messageId`), FR-010 (conflito sem inbox), FR-038 a FR-040
   (rastreabilidade, replay depois da resolução, atributos da DLQ) e os edge cases correspondentes.
 - Revalidado em 2026-11-08 (2ª iteração): 16/16 itens continuam passando.
+- 3ª iteração (2026-11-08): I-70 a I-73 registrados; FR-009a (erro inesperado no consumidor) acrescentado; FR-025
+  (reavaliação da referência antes do REFERENCE_NOT_FOUND), FR-026 (antecipação pela próxima varredura), FR-040 (códigos
+  e errorClass permanent/unexpected), SC-004, US2 cenário 4a, US4 cenário 1 e edge cases ajustados. 16/16 itens passando.

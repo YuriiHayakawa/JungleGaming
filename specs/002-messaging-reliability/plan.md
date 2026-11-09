@@ -80,7 +80,7 @@ alternativas em [research.md §0](research.md#0-spike-s-12-obrigatório).
 
 | # | Princípio | Como o plan atende | Pré | Pós |
 |---|-----------|--------------------|-----|-----|
-| I | Fontes da verdade e precedência | Toda decisão cita FR/I-xx. As decisões novas do usuário (I-61 a I-69) foram registradas em `docs/interpretacoes.md` antes da spec e deste plan. Leituras de interpretação que surgiram no plan estão em [Pendências de decisão](#pendências-de-decisão) e precisam ser registradas antes do implement. Opcionais (carga, caos separado, UI, métricas expostas) fora do escopo. | ✅ | ✅ |
+| I | Fontes da verdade e precedência | Toda decisão cita FR/I-xx. As decisões novas do usuário (I-61 a I-69) foram registradas em `docs/interpretacoes.md` antes da spec e deste plan; as leituras que surgiram no plan viraram I-70 a I-73 ([Pendências de decisão](#pendências-de-decisão), todas resolvidas). Opcionais (carga, caos separado, UI, métricas expostas) fora do escopo. | ✅ | ✅ |
 | II | Correção financeira | Nenhuma conta nova com dinheiro: o consumidor e o worker reusam `WagerRulesService`, `Wallet` e o gravador de transações da 001 (R-24). A conclusão de uma pendente grava saldo, lançamento e eventos na mesma transação (FR-027). Mensagem com dinheiro como número é payload inválido (FR-002, I-01). Nenhum `number` em dinheiro (T118 da 001 continua valendo). | ✅ | ✅ |
 | III | Concorrência por wallet | Ordem única de lock: wallet primeiro, linhas de transação depois (R-26). O worker reserva por lease numa transação mínima com `SKIP LOCKED`, sem lock de wallet, e processa sob o lock da wallet relendo a linha (FR-028). Sem lock global. Corretude com 3 instâncias de papéis diferentes, provada nos testes de concorrência. Leases e inbox no banco, nunca em memória. | ✅ | ✅ |
 | IV | Idempotência persistente e mensageria confiável | Inbox com PK `(consumer_name, message_id)` e `payload_hash` (I-28); inbox, transação, saldo, ledger e outbox na mesma transação (FR-003); ack só depois do commit (FR-005); outbox publicada só fora da transação e depois do commit, com lease e `SKIP LOCKED` para publicadores concorrentes (FR-016 a FR-020, I-31, I-65); HTTP e fila no mesmo use case (FR-001); classificação negócio/transitório/permanente (FR-008 a FR-010, I-30, I-66, I-68); SIGTERM conclui ou devolve visibilidade (FR-014, I-34); PENDING_REFERENCE com worker, backoff, limite e `REFERENCE_NOT_FOUND` + evento (FR-023 a FR-025, I-21, I-64). | ✅ | ✅ |
@@ -223,10 +223,12 @@ Laço (`PollingLoop`, R-28), ligado por `CONSUMER_ENABLED`:
    entrega não acontece porque o redrive move a mensagem para a DLQ ao passar de 5 recebimentos (FR-009, I-30).
 5. **Permanente**: `SendMessage` para a DLQ com o corpo original, o mesmo grupo, deduplicação pelo `messageId` e os
    atributos `errorCode`, `errorClass` = `permanent`, `receiveCount` e `consumer`; **só depois** `DeleteMessage` na
-   fila principal (FR-040, I-68). Queda entre os dois → a mensagem volta, é classificada de novo e reenviada; a
+   fila principal (FR-040, I-68, I-70). Queda entre os dois → a mensagem volta, é classificada de novo e reenviada; a
    deduplicação da DLQ absorve a repetição dentro da janela de 5 min (R-23).
-6. **Erro inesperado** (quebra de invariante, erro não classificado): permanente com `errorCode` `INTERNAL_ERROR`; o
-   consumidor nunca grava FAILED (I-22, I-61). Ver [Pendências](#pendências-de-decisão), item 2.
+6. **Erro inesperado** (quebra de invariante, erro não classificado): transitório, com o mesmo backoff do passo 4; no
+   5º recebimento (`ApproximateReceiveCount` = 5) a aplicação envia à DLQ com `errorCode` `INTERNAL_ERROR` e
+   `errorClass` `unexpected`, como no passo 5, e só então apaga da fila principal. O redrive (`maxReceiveCount` 5) fica
+   como rede de segurança, sem atributos. O consumidor nunca grava FAILED (FR-009a, I-61, I-71).
 
 Correspondência com o use case da 001: o comando ganha a origem (`http` | `queue`), a inbox opcional e o
 `causationId`; o HTTP não muda de comportamento (R-22).
@@ -272,9 +274,11 @@ Laço ligado por `PENDING_WORKER_ENABLED`, polling `PENDING_WORKER_POLL_MS` (~1 
       - **aplicar** → `markProcessed` (reescreve `observed_balance` e `reference_transaction_id`, I-67), saldo,
         lançamento, `WalletBalanceChanged` + `WagerTransactionProcessed`;
       - **rejeitar** → `reject` com o código, `WagerTransactionRejected`;
-      - **continua pendente** → se `PendingReferencePolicy` diz que esgotou (10 tentativas contando esta, ou teto de
-        10 min desde `created_at`) → `reject(REFERENCE_NOT_FOUND)` + evento (I-21, I-64); senão
-        `scheduleNextReferenceAttempt` (tentativas + 1 e próxima hora com backoff e jitter, I-11);
+      - **continua pendente** (a referência foi relida nesta avaliação e segue ausente ou pendente) → se
+        `PendingReferencePolicy` diz que esgotou (10 tentativas contando esta, ou teto de 10 min desde `created_at`) →
+        `reject(REFERENCE_NOT_FOUND)` + evento; senão `scheduleNextReferenceAttempt` (tentativas + 1 e próxima hora com
+        backoff e jitter, I-11). Como a referência é sempre reavaliada antes do esgotamento, uma referência que chegou
+        antes da última tentativa resolve normalmente (FR-025, I-21, I-64, I-72);
    6. os eventos do worker usam o `correlation_id` gravado na pendente, sem `causationId` (I-69);
    7. ao concluir (PROCESSED ou REJECTED), puxa para agora o `next_reference_attempt_at` das pendentes que referenciam
       esta transação (encadeamento, I-63);
@@ -290,7 +294,7 @@ Laço ligado por `PENDING_WORKER_ENABLED`, polling `PENDING_WORKER_POLL_MS` (~1 
 pelo worker), na mesma transação, `UPDATE wager_transactions SET next_reference_attempt_at = now WHERE status =
 'PENDING_REFERENCE' AND provider_id = ? AND reference_external_transaction_id = ?` (índice
 `wager_tx_pending_by_reference_idx`). Não processa as dependentes no caminho da requisição: o worker as pega na próxima
-varredura (~1 s), na ordem do I-63. Ver [Pendências](#pendências-de-decisão), item 4.
+varredura (`PENDING_WORKER_POLL_MS`, ~1 s), na ordem do I-63 e com a ordem de lock wallet primeiro (I-73).
 
 ### Ordem única de lock (constitution III, R-26)
 
@@ -356,12 +360,13 @@ passam a exigir o `localstack` do Compose no ar.
 |------|--------|------------|
 | Envelope | JSON inválido; campo ausente; `messageId` vazio, com 129 caracteres ou fora de `[A-Za-z0-9._:-]`; `type` desconhecido; `occurredAt` não ISO; `data` com dinheiro número, OPENING, "system", autorreferência; campos desconhecidos descartados | FR-002, I-57, I-60, I-66, I-69 |
 | Classificação | cada erro → ação (ack, visibilidade com backoff, DLQ com `errorCode`); backoff por `ApproximateReceiveCount` | FR-008 a FR-010, I-30, I-68 |
-| Política de pendente | sequência 5, 10, 20, 40, 60… (sem jitter = 435 s); jitter dentro dos limites; esgota na 10ª; teto de 10 min; transitório não conta | FR-023, FR-025, I-21, I-64 |
+| Política de pendente | sequência 5, 10, 20, 40, 60… (sem jitter = 435 s); jitter dentro dos limites; esgota na 10ª; teto de 10 min; transitório não conta; na última tentativa a referência aplicada ou rejeitada resolve normalmente (I-72) | FR-023, FR-025, I-21, I-64 |
 | Domínio | `InboxMessage` (`receive`, `rehydrate`, `markProcessed`); `scheduleNextReferenceAttempt` só em PENDING_REFERENCE; `OutboxMessage.scheduleRetry` 1 a 60 s | enunciado §6.5, I-11, I-65 |
 | Schema | migrations `up → down → up`; PK da inbox; `CHECK`s; imutabilidade da inbox; índices parciais no catálogo | constitution V |
 | Consumo | BET pela fila = HTTP; inbox, outbox e efeito juntos; REJECTED e PENDING_REFERENCE confirmados; `correlationId`/`causationId` = `messageId` nos eventos; logs com `messageId` | FR-001, FR-003, FR-008, FR-037, FR-038 |
 | Permanentes | cada classe → DLQ com 1 recebimento e atributos, nada gravado, removida da fila principal | FR-010, FR-040, SC-004 |
 | Transitórios | banco cortado (proxy TCP da 001) → 5 recebimentos → DLQ; banco volta antes do limite → 1 efeito | FR-009, SC-004 |
+| Erro inesperado | failpoint `after_ledger_insert_before_commit` pela fila em toda entrega → 4 voltas com backoff e, no 5º recebimento, DLQ enviada pela aplicação com `INTERNAL_ERROR`/`unexpected`; nada gravado, nem inbox, nem FAILED | FR-009a, FR-040, I-71 |
 | Atomicidade | failpoint entre o lançamento e o commit pela fila → nada gravado, nem inbox | FR-003, FR-013 |
 | Replay cruzado | HTTP depois fila e fila depois HTTP → 1 efeito, a segunda é replay | FR-006, I-28 |
 | FAILED | worker com erro permanente (failpoint) → FAILED em transação separada; replay HTTP → 500 `retryable` false; replay pela fila → ack | FR-029, FR-030, FR-012, I-61, I-62 |
@@ -387,22 +392,20 @@ requisitos das suítes.
 
 ## Pendências de decisão
 
-Leituras feitas neste plan sobre pontos que as interpretações não fecham por completo. Precisam ser registradas em
-`docs/interpretacoes.md` (ou corrigidas) antes do implement; nenhuma muda a spec:
+Todas resolvidas em 2026-11-08 e registradas em `docs/interpretacoes.md`:
 
-1. **Códigos de DLQ fora da taxonomia §7**: `MALFORMED_MESSAGE` (envelope, JSON, `messageId`),
-   `UNSUPPORTED_MESSAGE_TYPE` (I-66) e `INBOX_PAYLOAD_MISMATCH` (I-28). Proposta: uma tabela de códigos só de
-   atributo da DLQ, ao lado da §7 (contracts/queues.md).
-2. **Erro inesperado no consumidor** (quebra de invariante, erro não classificado): DLQ direta com `errorCode`
-   `INTERNAL_ERROR`, sem retries, lendo o I-22 ("na fila a mensagem vai para a DLQ") junto com o I-61. Alternativa:
-   tratar como transitório e deixar o redrive levar à DLQ depois de 5 recebimentos.
-3. **Esgotamento só com referência ausente ou pendente**: as 10 tentativas e o teto de 10 min (I-64) só rejeitam com
-   `REFERENCE_NOT_FOUND` quando a referência ainda não está aplicada nem rejeitada naquela reavaliação; se ela chegou,
-   valem as regras normais (FR-024 antes do FR-025).
-4. **"Na hora" do I-21**: a antecipação puxa as dependentes para a próxima varredura do worker (~1 s), conforme a
-   instrução do usuário, em vez de processá-las no caminho da requisição. SC-005 (5 s) acomoda.
-5. **Terceiro failpoint**: `after_pending_resolution_before_commit` (modos padrão e `invariant_violation`), além dos
-   dois pedidos, para provar o FAILED do worker (FR-029) sem mock.
+1. **Códigos de DLQ fora da taxonomia §7** → **I-70**: `MALFORMED_MESSAGE`, `UNSUPPORTED_MESSAGE_TYPE` e
+   `INBOX_PAYLOAD_MISMATCH` numa tabela própria da §7; toda mensagem enviada pela aplicação à DLQ leva `errorCode` e
+   `errorClass`.
+2. **Erro inesperado no consumidor** → **I-71**: transitório, com retry e backoff; no 5º recebimento a aplicação envia
+   à DLQ com `INTERNAL_ERROR`/`unexpected`; o redrive fica como rede de segurança. Substitui a proposta original (DLQ
+   direta).
+3. **Esgotamento** → **I-72**: na última tentativa a referência é reavaliada primeiro; `REFERENCE_NOT_FOUND` só se
+   continuar ausente ou pendente.
+4. **"Na hora" do I-21** → **I-73**: a antecipação só puxa a próxima tentativa das dependentes; a próxima varredura
+   (~1 s, configurável) as processa.
+5. **Terceiro failpoint** `after_pending_resolution_before_commit` (modos padrão e `invariant_violation`) → aceito pelo
+   usuário junto com o registro de I-70 a I-73; prova o FAILED do worker (FR-029) sem mock (R-29).
 
 ## Complexity Tracking
 
