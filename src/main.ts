@@ -7,6 +7,7 @@ import { loadConfig, type AppConfig } from './platform/config/app-config.ts';
 import { correlationMiddleware } from './platform/correlation/correlation.middleware.ts';
 import { installShutdownSignals } from './platform/lifecycle/signal-handler.ts';
 import { JsonLogger, requestLoggingMiddleware } from './platform/logging/json-logger.ts';
+import type { RandomSource } from './platform/random/random-source.port.ts';
 import { ID_GENERATOR, type IdGenerator } from './shared-kernel/domain/id-generator.port.ts';
 
 export interface StartedApp {
@@ -18,11 +19,13 @@ export interface StartedApp {
 export interface BootstrapOptions {
   /** Destino das linhas de log (padrão: stdout). Os testes em processo capturam as linhas por aqui. */
   logWriter?: (line: string) => void;
+  /** Fonte do jitter (R-25); padrão CryptoRandomSource. Os testes em processo passam um FixedRandom (T066). */
+  random?: RandomSource;
 }
 
 export async function bootstrap(config: AppConfig, options: BootstrapOptions = {}): Promise<StartedApp> {
   const logger = new JsonLogger(options.logWriter);
-  const app = await NestFactory.create(AppModule.forRoot(config, { logger }), { logger, abortOnError: false });
+  const app = await NestFactory.create(AppModule.forRoot(config, { logger, ...(options.random ? { random: options.random } : {}) }), { logger, abortOnError: false });
 
   // Antes de qualquer rota: correlationId (I-53) e uma linha de log por requisição (constitution VIII).
   app.use(correlationMiddleware(app.get<IdGenerator>(ID_GENERATOR)));

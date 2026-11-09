@@ -8,6 +8,7 @@ import { ORM } from '../../src/platform/persistence/orm.provider.ts';
 import { METRICS } from '../../src/platform/metrics/metrics.port.ts';
 import type { InMemoryMetrics } from '../../src/platform/metrics/in-memory-metrics.ts';
 import { SQS_PORT, type SqsPort } from '../../src/messaging/application/sqs.port.ts';
+import type { RandomSource } from '../../src/platform/random/random-source.port.ts';
 import { roleEnv, type Roles } from './roles.ts';
 
 export type { Roles } from './roles.ts';
@@ -31,6 +32,8 @@ export async function startApp(options: {
   roles?: Roles;
   /** Env das filas do arquivo (useTestQueues().env()). */
   queues?: Record<string, string>;
+  /** Jitter determinístico (FixedRandom) para o worker de PENDING_REFERENCE (T066). */
+  random?: RandomSource;
 }): Promise<RunningApp> {
   const logs: string[] = [];
   const config = loadConfig({
@@ -43,7 +46,10 @@ export async function startApp(options: {
     DATABASE_URL: options.databaseUrl,
     PORT: '0',
   });
-  const started = await bootstrap(config, { logWriter: (line) => logs.push(line) });
+  const started = await bootstrap(config, {
+    logWriter: (line) => logs.push(line),
+    ...(options.random ? { random: options.random } : {}),
+  });
   let closed = false;
   return {
     baseUrl: `http://127.0.0.1:${started.port}`,

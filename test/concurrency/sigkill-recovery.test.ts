@@ -3,7 +3,10 @@
 // REFUND de BET existente e de referência inexistente). Durante a carga, SIGKILL de uma instância aleatória três vezes,
 // com substituição por outra de mesmo papel. Ao final, depois da recuperação: wallet == ledger em todas; todo evento
 // confirmado tem published_at e aparece em wager-events; toda mensagem enviada foi processada uma vez (uma linha de
-// inbox) ou está na DLQ; nenhuma PENDING_REFERENCE sem next_reference_attempt_at. A US4 estende este teste com o worker.
+// inbox) ou está na DLQ; nenhuma PENDING_REFERENCE sem next_reference_attempt_at.
+// T071 (US4, SC-006): a instância consumidor + publicador também roda o worker de PENDING_REFERENCE; cada wallet ganha um
+// REFUND pendente cuja BET só chega no fim da carga; depois da recuperação, nenhuma pendente cuja referência foi enviada
+// continua PENDING_REFERENCE.
 import { afterAll, expect, test } from 'bun:test';
 import { assertAllWalletsMatchLedger } from '../support/assert-wallet-matches-ledger.ts';
 import { idempotencyKeyFor, wagerRequest, walletRequest, type WagerRequest } from '../support/factories.ts';
@@ -29,6 +32,10 @@ const SHORT = {
   PUBLISHER_LEASE_MS: '6000',
   PENDING_WORKER_LEASE_MS: '6000',
   PUBLISHER_POLL_MS: '200',
+  PENDING_WORKER_POLL_MS: '100',
+  PENDING_BACKOFF_BASE_MS: '200',
+  PENDING_BACKOFF_MAX_MS: '1000',
+  PENDING_MAX_ATTEMPTS: '1000000',
 };
 
 interface Slot {
@@ -74,7 +81,7 @@ async function post(path: string, body: unknown, headers: Record<string, string>
 const submit = (request: WagerRequest) => post('/wagering/transactions', request, { 'Idempotency-Key': idempotencyKeyFor(request) });
 
 test('SIGKILL aleatório três vezes no meio da carga: invariantes preservadas depois da recuperação', async () => {
-  for (const roles of [{ consumer: true }, { consumer: true, publisher: true }, { publisher: true }] satisfies Roles[]) {
+  for (const roles of [{ consumer: true }, { consumer: true, publisher: true, pendingWorker: true }, { publisher: true }] satisfies Roles[]) {
     slots.push({ roles, instance: await launch(roles) });
   }
 
@@ -87,6 +94,8 @@ test('SIGKILL aleatório três vezes no meio da carga: invariantes preservadas d
 
   const sentMessages: Array<{ messageId: string; externalId: string }> = [];
   const httpRequests: WagerRequest[] = [];
+  const lateBets: WagerRequest[] = [];
+  const latePendings: WagerRequest[] = [];
 
   async function load(wallet: { id: string; playerId: string }) {
     const base = { walletId: wallet.id, playerId: wallet.playerId };
@@ -111,6 +120,12 @@ test('SIGKILL aleatório três vezes no meio da carga: invariantes preservadas d
       expect([200, 201, 202, 422]).toContain(response.status);
       httpRequests.push(request);
     }
+    // Pendente cuja referência só chega no fim da carga (T071).
+    const lateBet = wagerRequest('BET', { ...base, money: { amount: '4.00', currency: 'BRL' } });
+    const latePending = wagerRequest('REFUND', { ...base, money: { amount: '4.00', currency: 'BRL' }, referenceExternalTransactionId: lateBet.externalTransactionId });
+    expect((await submit(latePending)).status).toBe(202);
+    lateBets.push(lateBet);
+    latePendings.push(latePending);
   }
 
   async function chaos() {
@@ -126,11 +141,19 @@ test('SIGKILL aleatório três vezes no meio da carga: invariantes preservadas d
   await Promise.all([Promise.all(wallets.map((wallet) => load(wallet))), chaos()]);
   expect(everyInstance.length).toBe(3 + KILLS);
 
-  // Recuperação: fila principal vazia e nenhum evento pendente.
+  // As referências das pendentes chegam no fim (T071).
+  for (const bet of lateBets) expect((await submit(bet)).status).toBe(201);
+  const lateIds = latePendings.map((r) => r.externalTransactionId);
+
+  // Recuperação: fila principal vazia, nenhum evento pendente e nenhuma pendente cuja referência chegou.
   await waitFor(async () => {
     const c = await counts(queues.urls.transactions);
     const pending = await database.db.query('SELECT 1 FROM outbox_messages WHERE published_at IS NULL');
-    return c.visible === 0 && c.notVisible === 0 && pending.length === 0;
+    const stillPending = await database.db.query(
+      "SELECT 1 FROM wager_transactions WHERE status = 'PENDING_REFERENCE' AND external_transaction_id = ANY(?)",
+      [lateIds],
+    );
+    return c.visible === 0 && c.notVisible === 0 && pending.length === 0 && stillPending.length === 0;
   }, 120_000, 500);
 
   // wallet == ledger em todas as wallets.
@@ -159,6 +182,14 @@ test('SIGKILL aleatório três vezes no meio da carga: invariantes preservadas d
   expect(events.every((e) => e.published_at !== null)).toBe(true);
   const ids = events.map((e) => e.id);
   await collectUntil(queues.urls.events, (got) => ids.every((id) => got.some((m) => m.deduplicationId === id)), 60_000);
+
+  // Toda pendente cuja referência chegou foi concluída uma vez, com um CREDIT (T071).
+  for (const externalId of lateIds) {
+    const rows = await database.db.query<{ id: string; status: string }>('SELECT id, status FROM wager_transactions WHERE external_transaction_id = ?', [externalId]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe('PROCESSED');
+    expect(await database.db.query('SELECT 1 FROM wallet_ledger_entries WHERE transaction_id = ?', [rows[0]!.id])).toHaveLength(1);
+  }
 
   // Nenhuma pendência esquecida: toda PENDING_REFERENCE tem a próxima tentativa agendada.
   const forgotten = await database.db.query(

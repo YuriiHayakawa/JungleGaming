@@ -7,7 +7,7 @@ import { EnvFailpoints, FAILPOINTS } from './platform/failpoints/failpoints.ts';
 import { InMemoryMetrics } from './platform/metrics/in-memory-metrics.ts';
 import { METRICS } from './platform/metrics/metrics.port.ts';
 import { CryptoRandomSource } from './platform/random/crypto-random-source.ts';
-import { RANDOM_SOURCE } from './platform/random/random-source.port.ts';
+import { RANDOM_SOURCE, type RandomSource } from './platform/random/random-source.port.ts';
 import { WORKER_REGISTRY, WorkerRegistry } from './platform/workers/worker-registry.ts';
 import { GlobalExceptionFilter } from './platform/http/global-exception.filter.ts';
 import { NoopAuthGuard } from './platform/auth/noop-auth.guard.ts';
@@ -25,6 +25,8 @@ import { WalletsModule } from './wallets/wallets.module.ts';
 
 export interface AppModuleOptions {
   logger: JsonLogger;
+  /** Fonte do jitter; padrão CryptoRandomSource (testes em processo passam um FixedRandom). */
+  random?: RandomSource;
 }
 
 /**
@@ -41,7 +43,7 @@ export class AppModule {
       { provide: ID_GENERATOR, useClass: UuidV7IdGenerator },
       // Porta de métricas em memória, uma por instância (FR-036, R-32); jitter pela porta RandomSource (R-25).
       { provide: METRICS, useValue: new InMemoryMetrics() },
-      { provide: RANDOM_SOURCE, useClass: CryptoRandomSource },
+      { provide: RANDOM_SOURCE, useValue: options.random ?? new CryptoRandomSource() },
       {
         provide: FAILPOINTS,
         useFactory: () => new EnvFailpoints({ failpoint: config.failpoint, nodeEnv: config.nodeEnv }),

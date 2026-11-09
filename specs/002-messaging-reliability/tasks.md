@@ -432,7 +432,7 @@ test/concurrency/sigkill-recovery.test.ts`, com o T065 concluído.
 
 ### Testes da User Story 4 (escrever primeiro; devem falhar)
 
-- [ ] T066 [P] [US4] Escrever `test/integration/pending-reference-worker.test.ts` (US4 cenários 1 a 3, 6 a 8; FR-023 a
+- [X] T066 [P] [US4] Escrever `test/integration/pending-reference-worker.test.ts` (US4 cenários 1 a 3, 6 a 8; FR-023 a
   FR-031, FR-038; I-11, I-15, I-21, I-61, I-64, I-69, I-72, I-73; SC-005), com `PENDING_WORKER_ENABLED=true`,
   `PENDING_WORKER_POLL_MS=100`, `PENDING_BACKOFF_BASE_MS=100`, `PENDING_BACKOFF_MAX_MS=400`, `PENDING_MAX_ATTEMPTS=3` e
   `FixedRandom`. Cada teste termina com `assertWalletMatchesLedger`.
@@ -450,45 +450,45 @@ test/concurrency/sigkill-recovery.test.ts`, com o T065 concluído.
   - `FAILPOINT=after_pending_resolution_before_commit:invariant_violation` → a pendente fica FAILED (`failure_code`
     `INTERNAL_ERROR`) numa transação separada, sem lançamento nem evento;
   - PostgreSQL cortado (proxy) durante uma tentativa → nada gravado e a tentativa não conta
-- [ ] T067 [P] [US4] Escrever `test/integration/pending-replay-after-resolution.test.ts` (FR-039; I-62, I-67): a mesma
+- [X] T067 [P] [US4] Escrever `test/integration/pending-replay-after-resolution.test.ts` (FR-039; I-62, I-67): a mesma
   requisição de uma pendente responde 202 antes e, depois da resolução, 200 (PROCESSED) ou 422 (REJECTED, com
   `failureCode`) com o saldo observado na conclusão; o `correlation_id` gravado não muda; uma pendente que ficou FAILED
   pelo worker responde 500 com `retryable` false
-- [ ] T068 [P] [US4] Escrever `test/concurrency/pending-worker-instances.test.ts` (US4 cenário 5; FR-028; SC-005, SC-008):
+- [X] T068 [P] [US4] Escrever `test/concurrency/pending-worker-instances.test.ts` (US4 cenário 5; FR-028; SC-005, SC-008):
   3 instâncias com o worker ligado e 30 pendentes cujas referências chegam juntas → cada pendente concluída uma única vez,
   com no máximo um lançamento; termina com `assertAllWalletsMatchLedger`
-- [ ] T069 [P] [US4] Escrever `test/concurrency/pending-resolution-race.test.ts`, o teste de corrida entre o worker e a
+- [X] T069 [P] [US4] Escrever `test/concurrency/pending-resolution-race.test.ts`, o teste de corrida entre o worker e a
   BET que resolve a pendente (FR-024, FR-026, FR-028; I-21, I-63, I-73; constitution III; falha eliminatória 2), repetido
   20 vezes: 2 instâncias com o worker em varredura curta (base 50 ms) reavaliando um REFUND pendente sem parar; a BET
   referenciada chega por HTTP por uma terceira instância num momento aleatório → o REFUND termina PROCESSED uma única
   vez, nunca `REFERENCE_NOT_FOUND` por corrida, com exatamente um CREDIT de reversão; `assertWalletMatchesLedger` em cada
   repetição
-- [ ] T070 [P] [US4] Escrever `test/concurrency/pending-order.test.ts` (US4 cenário 4; FR-026; I-16, I-63), repetido 10
+- [X] T070 [P] [US4] Escrever `test/concurrency/pending-order.test.ts` (US4 cenário 4; FR-026; I-16, I-63), repetido 10
   vezes: um REFUND e depois um ROLLBACK pendentes da mesma BET, com 3 instâncias de worker; a BET chega → o mais antigo
   é aplicado e o outro fica REJECTED `ALREADY_REVERSED`, sempre nessa ordem
-- [ ] T071 [US4] Estender `test/concurrency/sigkill-recovery.test.ts` (SC-006): uma das instâncias passa a ter também o
+- [X] T071 [US4] Estender `test/concurrency/sigkill-recovery.test.ts` (SC-006): uma das instâncias passa a ter também o
   papel de worker; as referências das pendentes da carga chegam no fim; depois da recuperação, nenhuma PENDING_REFERENCE
   cuja referência foi enviada continua pendente
 
 ### Implementação da User Story 4
 
-- [ ] T072 [US4] Extrair de `src/wagering/application/submit-wager-transaction.use-case.ts` a gravação de decisão para
+- [X] T072 [US4] Extrair de `src/wagering/application/submit-wager-transaction.use-case.ts` a gravação de decisão para
   `src/wagering/application/transaction-recorder.ts` (R-24), com a antecipação das dependentes (data-model §3.4) quando o
   resultado é PROCESSED ou REJECTED, usada pelo submit; toda a suíte da 001 e da US1 a US3 continua verde
-- [ ] T073 [US4] Estender `src/wagering/infrastructure/mikro-orm-wager-transaction.repository.ts` (data-model §3.3, §3.4):
+- [X] T073 [US4] Estender `src/wagering/infrastructure/mikro-orm-wager-transaction.repository.ts` (data-model §3.3, §3.4):
   `claimDuePending(em, now, batch, leaseMs)` com `FOR UPDATE SKIP LOCKED`; `findOlderSiblings(em, tx)`;
   `updateResolution(em, tx)` com `WHERE id = ? AND status = 'PENDING_REFERENCE'` (1 linha, senão quebra de invariante);
   `scheduleNextAttempt(em, tx)`; `markFailed(em, tx)`; `anticipateDependents(em, providerId, externalId, now)`; SQL com `?`
-- [ ] T074 [US4] Implementar `src/wagering/application/resolve-pending-reference.use-case.ts` (plan, "Worker"; FR-023 a
+- [X] T074 [US4] Implementar `src/wagering/application/resolve-pending-reference.use-case.ts` (plan, "Worker"; FR-023 a
   FR-031; I-21, I-61, I-63, I-64, I-72): por pendente reservada, irmãs mais antigas primeiro, cada uma numa transação da
   unit of work com lock da wallet; relê a linha; avalia com `WagerRulesService`; aplica pelo recorder; esgotamento só com
   a referência ausente ou pendente; eventos com o `correlation_id` da pendente; failpoint antes do commit; `23505` no
   índice de reversão → repete uma vez; erro permanente inesperado → FAILED em transação separada; transitório → sem
   efeito e sem contar tentativa
-- [ ] T075 [US4] Implementar `src/wagering/interfaces/workers/pending-reference.worker.ts` (provider com ciclo de vida,
+- [X] T075 [US4] Implementar `src/wagering/interfaces/workers/pending-reference.worker.ts` (provider com ciclo de vida,
   ligado por `PENDING_WORKER_ENABLED`, `PollingLoop` com `PENDING_WORKER_POLL_MS`, claim por lease) e registrá-lo no
   `src/wagering/wagering.module.ts`. Faz o T066 a T071 passarem
-- [ ] T076 [US4] Revisar o diff da US4 contra o `review-checklist.md`, com atenção à ordem de lock (claim com
+- [X] T076 [US4] Revisar o diff da US4 contra o `review-checklist.md`, com atenção à ordem de lock (claim com
   `SKIP LOCKED`, processamento sob o lock da wallet, antecipação depois do lock de origem) e à releitura sob o lock;
   registrar item a item
 

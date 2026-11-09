@@ -14,27 +14,17 @@ import {
 } from '../../shared-kernel/application/errors.ts';
 import type { Clock } from '../../shared-kernel/domain/clock.port.ts';
 import type { IdGenerator } from '../../shared-kernel/domain/id-generator.port.ts';
-import type { EventContext, IntegrationEvent } from '../../shared-kernel/domain/integration-event.ts';
 import { Money, type MoneyProps } from '../../shared-kernel/domain/money.ts';
-import { WalletBalanceChanged } from '../../wallets/domain/events/wallet-balance-changed.event.ts';
-import { LedgerDirection } from '../../wallets/domain/ledger-direction.ts';
-import type { Wallet } from '../../wallets/domain/wallet.ts';
-import type { MikroOrmLedgerRepository } from '../../wallets/infrastructure/mikro-orm-ledger.repository.ts';
 import type { MikroOrmWalletRepository } from '../../wallets/infrastructure/mikro-orm-wallet.repository.ts';
-import { WagerTransactionProcessed } from '../domain/events/wager-transaction-processed.event.ts';
-import { WagerTransactionPendingReference } from '../domain/events/wager-transaction-pending-reference.event.ts';
-import { WagerTransactionRejected } from '../domain/events/wager-transaction-rejected.event.ts';
-import { WagerRulesService, type WagerDecision } from '../domain/wager-rules.service.ts';
+import { WagerRulesService } from '../domain/wager-rules.service.ts';
 import { WagerTransaction, WagerTransactionStatus, type WagerTransactionKind } from '../domain/wager-transaction.ts';
 import type { MikroOrmWagerTransactionRepository } from '../infrastructure/mikro-orm-wager-transaction.repository.ts';
 import { computePayloadHash } from './payload-hash.ts';
+import type { TransactionRecorder } from './transaction-recorder.ts';
 import { toTransactionResult, type TransactionResult } from './transaction-result.ts';
 
 /** Uma única repetição do use case depois de 23505 no índice de reversão única (R-12). */
 const MAX_REVERSAL_RACE_RETRIES = 1;
-
-/** Base do backoff do worker de PENDING_REFERENCE (I-21): a 1ª tentativa fica para a criação + 5 s. */
-const PENDING_REFERENCE_FIRST_ATTEMPT_DELAY_MS = 5_000;
 
 /** Payload de negócio já validado e normalizado pela borda (HTTP agora; fila na feature de mensageria). */
 export interface SubmitWagerTransactionInput {
@@ -100,8 +90,9 @@ export interface SubmitWagerTransactionDeps {
   unitOfWork: UnitOfWork<EntityManager>;
   wallets: MikroOrmWalletRepository;
   transactions: MikroOrmWagerTransactionRepository;
-  ledger: MikroOrmLedgerRepository;
   outbox: MikroOrmOutboxWriter;
+  /** Gravação da decisão, compartilhada com o worker de PENDING_REFERENCE (R-24). */
+  recorder: TransactionRecorder;
   inbox: MikroOrmInboxRepository;
   failpoints: Failpoints;
   clock: Clock;
@@ -269,8 +260,9 @@ export class SubmitWagerTransactionUseCase {
 
   /**
    * Dentro da transação: toda query usa o `em` recebido, que é o da transação (R-19). Trava a wallet, relê a
-   * idempotência sob o lock, carrega a referência, decide e grava na ordem do data-model §3: transação já no status
-   * final → saldo com asserção de versão → lançamento → outbox.
+   * idempotência sob o lock, carrega a referência, decide e grava pelo `TransactionRecorder` (R-24) na ordem do
+   * data-model §3: transação já no status final → saldo com asserção de versão → lançamento → antecipação das
+   * dependentes (002, §3.4) → outbox.
    */
   private async applyUnderLock(em: EntityManager, request: AcceptedRequest): Promise<UnderLockOutcome> {
     const wallet = await this.deps.wallets.lockById(em, request.command.input.walletId);
@@ -298,10 +290,13 @@ export class SubmitWagerTransactionUseCase {
     const referenceAlreadyReversed = await this.isAlreadyReversed(em, transaction, reference);
     const decision = this.rules.decide({ wallet, transaction, reference, referenceAlreadyReversed });
     const now = this.deps.clock.now();
-    const events = await this.record(em, decision, wallet, transaction, reference, {
-      correlationId: request.correlationId,
-      causationId: request.command.causationId,
-      now,
+    const events = await this.deps.recorder.record(em, {
+      decision,
+      wallet,
+      transaction,
+      reference,
+      mode: 'insert',
+      at: { correlationId: request.correlationId, causationId: request.command.causationId, now },
     });
 
     // Fila: inbox depois da transação (FK) e antes da outbox, no mesmo commit (data-model §3.1 passo 8, FR-003).
@@ -393,64 +388,5 @@ export class SubmitWagerTransactionUseCase {
       createdAt: receivedAt,
     });
     return transaction;
-  }
-
-  /** Aplica a decisão e devolve os eventos na ordem de gravação: WalletBalanceChanged antes do evento de status. */
-  private async record(
-    em: EntityManager,
-    decision: WagerDecision,
-    wallet: Wallet,
-    transaction: WagerTransaction,
-    reference: WagerTransaction | undefined,
-    at: { correlationId: string; causationId: string | undefined; now: Date },
-  ): Promise<IntegrationEvent<unknown>[]> {
-    const { ids } = this.deps;
-    // Na fila, causationId = messageId (I-69); no HTTP, ausente.
-    const context = (): EventContext => ({
-      eventId: ids.next(),
-      correlationId: at.correlationId,
-      ...(at.causationId !== undefined ? { causationId: at.causationId } : {}),
-      occurredAt: at.now,
-    });
-
-    switch (decision.type) {
-      case 'REJECT': {
-        // REJECTED não altera saldo nem gera lançamento (FR-027); o saldo observado é o atual (FR-036).
-        transaction.reject(decision.code, wallet.balance, at.now);
-        await this.deps.transactions.insert(em, transaction);
-        return [WagerTransactionRejected.from(transaction, context())];
-      }
-      case 'APPLY': {
-        const events: IntegrationEvent<unknown>[] = [];
-        if (decision.direction === undefined) {
-          // Sem efeito no saldo: PROCESSED sem lançamento e sem tocar a wallet (FR-018).
-          transaction.markProcessed(reference?.id, wallet.balance, at.now);
-          await this.deps.transactions.insert(em, transaction);
-        } else {
-          const expectedVersion = wallet.version;
-          const entryId = ids.next();
-          const entry =
-            decision.direction === LedgerDirection.Debit
-              ? wallet.debit(transaction.money, entryId, transaction.id, at.now)
-              : wallet.credit(transaction.money, entryId, transaction.id, at.now);
-          transaction.markProcessed(reference?.id, wallet.balance, at.now);
-          await this.deps.transactions.insert(em, transaction);
-          await this.deps.wallets.updateBalance(em, wallet, expectedVersion);
-          await this.deps.ledger.insert(em, entry);
-          events.push(WalletBalanceChanged.from(wallet, entry, context()));
-        }
-        events.push(WagerTransactionProcessed.from(transaction, wallet.version, context()));
-        return events;
-      }
-      case 'PENDING_REFERENCE': {
-        // Referência ausente ou ainda não aplicada (I-15, FR-023): aceita sem tocar na wallet, sem lançamento e sem
-        // failureCode; o saldo observado é o atual (FR-036). A 1ª tentativa do worker (feature 2) fica agendada para
-        // a criação + 5 s, a base do backoff do I-21; `createdAt` é o `clock.now()` do recebimento da requisição.
-        const nextAttemptAt = new Date(transaction.createdAt.getTime() + PENDING_REFERENCE_FIRST_ATTEMPT_DELAY_MS);
-        transaction.markPendingReference(wallet.balance, nextAttemptAt, at.now);
-        await this.deps.transactions.insert(em, transaction);
-        return [WagerTransactionPendingReference.from(transaction, context())];
-      }
-    }
   }
 }
