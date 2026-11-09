@@ -7,6 +7,11 @@
 
 - O ambiente da 001 e da 002 funcionando (Bun 1.4.4, Docker com Compose, MiniStack, `.env` a partir do `.env.example`).
 - Nenhuma variável nova: o prazo das checagens de ready (2 s) é fixo (I-75).
+- Só `curl`; os exemplos não dependem de `jq`.
+
+> Validado de ponta a ponta em 2026-11-09 (T037). Correções feitas no texto nessa validação: o `jq` saiu dos
+> exemplos; depois de `start sqs` é preciso rodar `queue-init`, porque o MiniStack perde as filas no reinício e o ready
+> fica 503 até elas existirem; e o §3.6 ganhou a forma de observar o 503 com trabalho em andamento.
 
 ## 2. Subir o cluster
 
@@ -28,11 +33,11 @@ curl -i http://localhost:3001/health/ready    # 200 {"status":"ok","checks":{"po
 
 ```bash
 W=$(curl -s -X POST localhost:3001/wallets -H 'Content-Type: application/json' \
-  -d '{"playerId":"p-quickstart","initialBalance":{"amount":"100.00","currency":"BRL"}}' | jq -r .id)
+  -d '{"playerId":"p-quickstart","initialBalance":{"amount":"100.00","currency":"BRL"}}' | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
 curl -s -X POST localhost:3001/wagering/transactions -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: provider-a:qs-bet-1' \
   -d "{\"providerId\":\"provider-a\",\"externalTransactionId\":\"qs-bet-1\",\"playerId\":\"p-quickstart\",\"walletId\":\"$W\",\"roundId\":\"r1\",\"gameId\":\"g1\",\"kind\":\"BET\",\"money\":{\"amount\":\"25.00\",\"currency\":\"BRL\"}}"
-curl -s -X POST localhost:3002/wallets/$W/reconciliation | jq
+curl -s -X POST localhost:3002/wallets/$W/reconciliation
 ```
 
 Esperado: `storedBalance` e `calculatedBalance` 75.00, `difference` 0.00, `consistent` true, `chainConsistent` true,
@@ -62,7 +67,8 @@ docker compose stop sqs
 curl -i localhost:3001/health/ready     # 503 {"status":"unavailable","checks":{"postgres":"up","sqs":"down"}} em até ~2 s
 curl -i localhost:3001/health/live      # 200
 # uma nova BET por HTTP continua respondendo 201 (I-34)
-docker compose start sqs                # ready volta a 200 sem reiniciar a app
+docker compose start sqs                # o MiniStack volta sem filas: ready continua 503 com "sqs":"down"
+docker compose run --rm queue-init      # recria as filas; ready volta a 200 sem reiniciar a app
 
 docker compose stop postgres
 curl -i localhost:3001/health/ready     # 503 com "postgres":"down"; live continua 200
@@ -76,6 +82,21 @@ docker compose stop app2 &              # SIGTERM; durante a drenagem:
 curl -i localhost:3002/health/ready     # 503 enquanto a instância drena (pode já ter saído se não havia trabalho)
 wait; docker compose ps app2            # saída 0
 ```
+
+Sem trabalho em andamento, a instância sai em menos de 1 s, e o `docker compose stop` leva cerca de 1 s para
+entregar o sinal; o curl costuma não pegar o 503. Para observá-lo:
+
+1. Pare a `app1`, para que só a `app2` consuma.
+2. Espere 20 s: o long polling abortado da `app1` continua pendente no MiniStack e pegaria a próxima mensagem (N-35 da
+   002).
+3. Segure o lock da wallet por fora:
+   `docker compose exec -T postgres psql -U junglegaming -c "BEGIN; SELECT id FROM wallets WHERE id = '<W>' FOR UPDATE; SELECT pg_sleep(15); COMMIT;" &`.
+4. Envie uma BET dessa wallet pela fila e, com a mensagem em andamento, rode `docker compose stop app2 &`.
+5. Consulte o ready em laço: ele responde 503 com `postgres` e `sqs` up, enquanto `GET /wallets/<W>` e o live
+   continuam 200. Solto o lock, a mensagem é concluída e a instância sai com 0.
+
+O teste `test/concurrency/graceful-sigterm.test.ts` faz exatamente isso de forma automática, lendo o ready de dentro
+do container.
 
 ### 3.7 Divergência
 

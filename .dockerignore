@@ -6,7 +6,6 @@ Dockerfile*
 .env*
 coverage/
 dist/
-spike/
 specs/
 test/
 .specify/

@@ -14,7 +14,12 @@ numeração continua a da feature 001 (R-01 a R-19 seguem valendo); esta feature
 > `process.exit(0)`, sai com 0 e foi adotada (R-35). As mudanças do §0.4 foram aprovadas pelo usuário e aplicadas ao
 > plan, ao quickstart e às tasks em 2026-11-08; a data-model não mudou.
 
-Código descartável em `spike/s12/` (o `spike/` da 001, na raiz, não foi tocado).
+O código descartável ficava em `spike/s12/` (o `spike/` da 001, na raiz, não foi tocado).
+
+> **Código do spike removido em 2026-11-09 (T121 da 001).** O `spike/s12/` nunca foi versionado e foi apagado do
+> disco, junto com os containers do projeto Compose `jg-spike-s12`. Nada em `src/`, `test/`, `scripts/`,
+> `package.json`, `Dockerfile` ou `docker-compose.yml` dependia dele (conferido por grep). **Os resultados, os comandos
+> e as mudanças registrados abaixo continuam valendo como registro.**
 
 ### 0.1 Ambiente e comandos
 

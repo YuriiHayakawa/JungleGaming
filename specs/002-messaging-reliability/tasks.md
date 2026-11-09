@@ -602,10 +602,10 @@ test/integration/sqs-outage.test.ts`
 - [X] T086 Executar a suíte completa pelos scripts do `package.json`, com `docker compose up -d postgres sqs`:
   `bun run typecheck && bun run test` (unit, integration e concurrency), tudo verde, inclusive o T084; registrar a
   contagem de testes e a duração
-- [ ] T087 Validar o `quickstart.md` de ponta a ponta: `docker compose --profile cluster up -d --build` e os cenários
+- [X] T087 Validar o `quickstart.md` de ponta a ponta: `docker compose --profile cluster up -d --build` e os cenários
   §3.1 a §3.5 com o `aws` CLI do host (`--endpoint-url http://localhost:4566`), inclusive `docker compose stop app1` com
   saída 0 e `queue-init` rodado duas vezes sem erro
-- [ ] T088 **(adiado para o fim do projeto, depois das features 2 e 3)** Acrescentar ao `README.md` e ao `ARCHITECTURE.md`
+- [X] T088 **(adiado para o fim do projeto, depois das features 2 e 3)** Acrescentar ao `README.md` e ao `ARCHITECTURE.md`
   o conteúdo desta feature listado no plan ("Documentação") e no research §4
 
 ---

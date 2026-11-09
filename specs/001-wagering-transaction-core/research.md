@@ -11,7 +11,14 @@ Alternatives e cita o FR ou I-xx que a motiva.
 > registradas. Dois pontos fora da tabela pediram ajuste: o `bun build` (extra) precisou de
 > `--packages external`, e o SIGTERM no Windows mata o processo à força. Os ajustes que o spike trouxe estão em
 > [0.3](#03-ajustes-decorrentes-do-spike) e **todos foram aplicados** ao plan.md e à data-model.md. O código
-> descartável está em `spike/`.
+> descartável estava em `spike/`.
+>
+> **Código do spike removido em 2026-11-09 (T121).** O diretório `spike/` saiu do repositório, e os containers do
+> projeto Compose `jg-spike` foram derrubados com `down -v`. Antes, um grep em `src/`, `test/`, `scripts/`,
+> `package.json`, `Dockerfile` e `docker-compose.yml` confirmou que nada importava nem executava o spike: só havia
+> comentários citando os resultados (S-03, S-05, S-08 etc.). **Os resultados, os comandos e os ajustes registrados
+> abaixo continuam valendo como registro.** Os caminhos `spike/…` citados abaixo existem só no histórico do git, até o
+> commit `30a0241`.
 
 ### 0.1 Ambiente e comandos
 

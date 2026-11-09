@@ -287,9 +287,9 @@ nenhum rótulo com id ou valor.
 - [X] T036 Executar a suíte completa pelos scripts do `package.json`, com `docker compose up -d postgres sqs`:
   `bun run typecheck && bun run test` (unit, integration e concurrency), tudo verde, inclusive o T034; registrar a
   contagem de testes e a duração
-- [ ] T037 Validar o `quickstart.md` de ponta a ponta com `docker compose --profile cluster up -d --build` (cenários §3.1
+- [X] T037 Validar o `quickstart.md` de ponta a ponta com `docker compose --profile cluster up -d --build` (cenários §3.1
   a §3.6)
-- [ ] T038 **(adiado para o fim do projeto)** Acrescentar ao `README.md` e ao `ARCHITECTURE.md` o conteúdo desta feature
+- [X] T038 **(adiado para o fim do projeto)** Acrescentar ao `README.md` e ao `ARCHITECTURE.md` o conteúdo desta feature
   (plan, research §4)
 
 ---

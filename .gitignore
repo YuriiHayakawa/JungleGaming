@@ -6,7 +6,3 @@ node_modules/
 coverage/
 *.log
 dist/
-
-# spike descartável (removido no T121)
-spike/node_modules/
-spike/dist/

@@ -8,9 +8,14 @@
 - Os da 001 (Bun 1.4.4, Docker com Compose) e o ambiente da 001 funcionando.
 - Emulador MiniStack `ministackorg/ministack:1.5.32` (serviço `sqs` do Compose), adotado no spike S-12
   ([research.md §0](research.md)); o LocalStack 2026.10.2 exige token e não é usado.
-- Para os exemplos com fila: o `aws` CLI v2 no host, com credenciais fictícias (`AWS_ACCESS_KEY_ID=test`,
-  `AWS_SECRET_ACCESS_KEY=test`, `AWS_REGION=us-east-1`). Sem o CLI, os mesmos passos podem ser feitos com um script `bun`
-  sobre o `@aws-sdk/client-sqs` (o próprio `scripts/queue-init.ts` serve de base).
+- Para os exemplos com fila: só `curl`. O MiniStack aceita o protocolo JSON do SQS sem assinatura, e a função `sqs` do
+  [README, §8](../../README.md#8-filas-sqs-e-como-inspecioná-las) cobre envio, leitura e atributos. O `aws` CLI v2 no
+  host também serve, mas não é necessário, com credenciais fictícias (`AWS_ACCESS_KEY_ID=test`,
+  `AWS_SECRET_ACCESS_KEY=test`, `AWS_REGION=us-east-1`).
+
+> Validado de ponta a ponta em 2026-11-09 (T087), com `curl` e sem o `aws` CLI. Correções feitas no texto nessa
+> validação: o `aws` CLI deixou de ser pré-requisito; o redrive com o banco parado levou 150 s (o texto dizia cerca de
+> 2 min); e o MiniStack **perde as filas ao reiniciar**, então o `queue-init` depois de `start sqs` é obrigatório.
 - `.env` com as variáveis novas do `.env.example` (SQS, papéis e tempos; research R-27).
 
 ## 2. Subir o ambiente
@@ -26,11 +31,13 @@ Esperado: `migrate` e `queue-init` terminam com código 0 (rodar `docker compose
 termina com 0, sem duplicar filas); `app1` (HTTP + consumidor), `app2` (HTTP + consumidor +
 publicador) e `app3` (HTTP + publicador + worker) no ar, cada um com a linha `http.listening` no log.
 
-Para enviar e ler mensagens, os exemplos usam o `aws` CLI do host apontado para o emulador: `alias awsq="aws
---endpoint-url http://localhost:4566"` (a imagem do MiniStack não traz `awslocal` nem o `aws` CLI). Chame de `Q` a
-URL de `wager-transactions.fifo`, `DLQ` a da DLQ e `EV` a de
-`wager-events.fifo` (`awsq sqs get-queue-url --queue-name ...`). Envio: `awsq sqs send-message --queue-url $Q
---message-group-id <walletId> --message-deduplication-id <messageId> --message-body file://msg.json`.
+Para enviar e ler mensagens, use a função `sqs` do README §8 (curl com o protocolo JSON do SQS). As URLs são
+`Q` = `http://localhost:4566/000000000000/wager-transactions.fifo`, `DLQ` = `.../wager-transactions-dlq.fifo` e
+`EV` = `.../wager-events.fifo`. Envio: `sqs SendMessage` com `MessageGroupId` = walletId,
+`MessageDeduplicationId` = messageId e `MessageBody` = o envelope serializado como string JSON (README §8). Leitura sem
+esconder: `sqs ReceiveMessage` com `"VisibilityTimeout":0` e `"MessageAttributeNames":["All"]`. Com o `aws` CLI, os
+equivalentes são `aws --endpoint-url http://localhost:4566 sqs send-message` e `receive-message`. A imagem do
+MiniStack não traz `awslocal`.
 
 ## 3. Cenários
 
@@ -51,18 +58,19 @@ URL de `wager-transactions.fifo`, `DLQ` a da DLQ e `EV` a de
 2. Em `DLQ`: as quatro mensagens, cada uma com `errorClass` `permanent` e o `errorCode` de
    [queues.md](contracts/queues.md) (`MALFORMED_MESSAGE`, `UNSUPPORTED_MESSAGE_TYPE`, `VALIDATION_ERROR`,
    `WALLET_NOT_FOUND`), `receiveCount` 1; nenhuma transação gravada.
-3. `docker compose stop postgres`, enviar uma BET válida, esperar cerca de 2 min com o banco parado: a mensagem chega à
-   `DLQ` pelo redrive, depois de 5 recebimentos, sem os atributos da aplicação. `docker compose start postgres`.
+3. `docker compose stop postgres`, enviar uma BET válida, esperar de 2 a 3 min com o banco parado (medido: 150 s): a
+   mensagem chega à `DLQ` pelo redrive, depois de 5 recebimentos, sem os atributos da aplicação.
+   `docker compose start postgres`.
 
 ### 3.3 Eventos publicados (US3)
 
-1. Depois do 3.1, ler `EV` (`awsq sqs receive-message --queue-url $EV --max-number-of-messages 10 --message-attribute-names All`): o
+1. Depois do 3.1, ler `EV` (`sqs ReceiveMessage` com `"MaxNumberOfMessages":10`): o
    `WalletBalanceChanged` e o `WagerTransactionProcessed` da BET, com `causationId` = `correlationId` = `messageId`,
    conforme [integration-events.schema.json](contracts/integration-events.schema.json).
 2. `docker compose stop sqs`; submeter BETs por HTTP: respostas 201 normais. `docker compose start sqs` e
-   `docker compose run --rm queue-init` (idempotente; necessário se o emulador tiver perdido as filas no reinício, o que
-   o spike não mediu): em alguns segundos os eventos
-   acumulados aparecem em `EV`.
+   `docker compose run --rm queue-init` (idempotente e **obrigatório**: medido em 2026-11-09, o MiniStack 1.5.32 guarda
+   as filas só em memória e volta do reinício sem nenhuma): em alguns segundos (medido: cerca de 3 s) os eventos
+   acumulados aparecem em `EV`, cada um uma vez.
 
 ### 3.4 Pendente concluída sozinha (US4)
 

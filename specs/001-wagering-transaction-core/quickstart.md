@@ -10,22 +10,29 @@ Guia de execução e validação de ponta a ponta. Não contém implementação.
 
 - Bun 1.4.4 (`bun --version`)
 - Docker com Compose v2, com o daemon ativo (`docker info`)
-- Portas livres: 5432 (PostgreSQL) e 3001 a 3003 (instâncias da app)
+- Portas livres: 5432 (PostgreSQL, configurável por `POSTGRES_PORT`), 4566 (MiniStack, desde a feature 002) e 3001 a
+  3003 (instâncias da app)
 
 ## 2. Subir o ambiente
 
 ```bash
 bun install --frozen-lockfile
-docker compose up -d                     # postgres + migrate (one-shot) + app1
-docker compose --profile cluster up -d   # acrescenta app2 e app3
+docker compose up -d --build                     # postgres + migrate, sqs + queue-init (one-shot) + app1
+docker compose --profile cluster up -d --build   # acrescenta app2 e app3
 ```
 
-O serviço `migrate` roda `migrate:up` antes das instâncias. Para rodar localmente, fora do Compose:
+O serviço `migrate` roda `migrate:up` e o `queue-init` cria as filas antes das instâncias (desde a feature 002). Para
+rodar localmente, fora do Compose, com `postgres` e `sqs` no ar e numa porta que a `app1` não usa:
 
 ```bash
 bun run migrate:up
-PORT=3001 bun run dev
+bun run queue:init
+PORT=3000 bun run dev
 ```
+
+> Validado de ponta a ponta em 2026-11-09 (T123), com o cluster das três features. Correções feitas no texto nessa
+> validação: a porta 4566 e o `sqs`/`queue-init` (entraram com a 002), `--build` e `PORT=3000` no modo local (a 3001
+> é da `app1`), e os requisitos dos testes na tabela abaixo.
 
 Variáveis principais (padrões em `.env.example`): `DATABASE_URL`, `PORT`, `WALLET_LOCK_TIMEOUT_MS=5000`,
 `DB_POOL_MAX=25`, `DB_POOL_ACQUIRE_TIMEOUT_MS=8000`, `HTTP_SERVER_TIMEOUT_MS=20000`, `RETRY_AFTER_SECONDS=1`,
@@ -39,9 +46,10 @@ Variáveis principais (padrões em `.env.example`): `DATABASE_URL`, `PORT`, `WAL
 |---------|------------|--------|
 | `bun run typecheck` | `tsc --noEmit` estrito | — |
 | `bun run test:unit` | domínio (`test/unit`) | — |
-| `bun run test:integration` | `test/integration`, cada arquivo num banco próprio clonado do template `jg_test_template` | `postgres` do Compose |
-| `bun run test:concurrency` | `test/concurrency` com 3 processos da app via `Bun.spawn` | `postgres` do Compose |
-| `bun run test` | os três acima, em sequência | `postgres` do Compose |
+| `bun run test:integration` | `test/integration`, cada arquivo num banco próprio clonado do template `jg_test_template` | `postgres` e `sqs` do Compose |
+| `bun run test:concurrency` | `test/concurrency` com 3 processos da app via `Bun.spawn` e SIGTERM em container | `postgres` e `sqs` do Compose e Docker |
+| `bun run test` | os três acima, em sequência | idem |
+| `bun run test:chaos` | conjunto focado de testes de falha (subconjunto de `test:concurrency`) | idem |
 | `bun run migrate:down` | desfaz todas as migrations | — |
 
 Resultado esperado: todos verdes, e todo teste que toca wallet termina com `assertWalletMatchesLedger`
