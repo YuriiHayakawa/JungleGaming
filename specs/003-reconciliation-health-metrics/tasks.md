@@ -178,11 +178,11 @@ drenagem, em processo e em container.
 
 ### Testes da User Story 2 (escrever primeiro; devem falhar)
 
-- [ ] T020 [P] [US2] Escrever `test/unit/readiness.test.ts` (R-39; FR-014 a FR-016): `readinessOf(checks, draining)` em
+- [X] T020 [P] [US2] Escrever `test/unit/readiness.test.ts` (R-39; FR-014 a FR-016): `readinessOf(checks, draining)` em
   todas as combinações de `postgres`/`sqs` `up`/`down` × `draining` (200 só com tudo `up` e sem `draining`; corpo
   `{"status":"ok"|"unavailable","checks":{...}}`); `withTimeout(fn, 2000)` devolve `down` quando a checagem não
   termina no prazo (com relógio de teste) e não deixa temporizador pendente
-- [ ] T021 [P] [US2] Escrever `test/integration/health.test.ts` (US2 cenários 1, 2, 3, 5 e 6; FR-013 a FR-015, FR-017,
+- [X] T021 [P] [US2] Escrever `test/integration/health.test.ts` (US2 cenários 1, 2, 3, 5 e 6; FR-013 a FR-015, FR-017,
   FR-018; SC-004, SC-005, SC-009; I-34, I-75), com proxies TCP reais na frente do PostgreSQL e do MiniStack:
   - tudo no ar → live 200 `{"status":"ok"}`, ready 200 `{"status":"ok","checks":{"postgres":"up","sqs":"up"}}`;
   - PostgreSQL cortado → ready 503 `postgres:down` em até 3 s, live 200; volta a 200 sem reinício;
@@ -191,28 +191,28 @@ drenagem, em processo e em container.
   - filas inexistentes (configuração com nomes que não existem) → `sqs:down`;
   - conexão pendurada (`stall()`) no PostgreSQL e no SQS → 503 em até 3 s, sem ficar preso;
   - sem credencial; corpo fora do envelope do I-38; linhas `http.request` dessas rotas em nível `debug`
-- [ ] T022 [P] [US2] Escrever `test/integration/health-shutdown.test.ts` (US2 cenário 4; FR-016; SC-006; R-40):
+- [X] T022 [P] [US2] Escrever `test/integration/health-shutdown.test.ts` (US2 cenário 4; FR-016; SC-006; R-40):
   consumidor ligado e uma mensagem presa no lock da wallet segurado por fora; `app.shutdown()` (o mesmo
   `gracefulShutdown` do sinal) sem `await`; enquanto drena, ready responde 503 com `checks` reais e `GET
   /wallets/:walletId` ainda responde 200; o lock é solto; o encerramento termina, a mensagem é processada uma única vez
   e `assertWalletMatchesLedger`
-- [ ] T023 [US2] Estender `test/concurrency/graceful-sigterm.test.ts` (FR-016; SC-006; R-40): nas duas variantes
+- [X] T023 [US2] Estender `test/concurrency/graceful-sigterm.test.ts` (FR-016; SC-006; R-40): nas duas variantes
   (`app-test` e `app-test-init`), depois do SIGTERM e antes de soltar o lock, ler o ready de dentro do container
   (`docker exec <id> bun -e "…fetch('http://127.0.0.1:<porta>/health/ready')…"`) e conferir 503; o resto do teste
   (conclusão, ack, saída 0, uma única vez) continua igual
 
 ### Implementação da User Story 2
 
-- [ ] T024 [US2] Implementar `src/health/application/readiness.ts` (R-39): `readinessOf` puro e `withTimeout` com
+- [X] T024 [US2] Implementar `src/health/application/readiness.ts` (R-39): `readinessOf` puro e `withTimeout` com
   temporizador cancelado; constante `HEALTH_CHECK_TIMEOUT_MS = 2000` (I-75). Faz o T020 passar
-- [ ] T025 [P] [US2] Implementar `src/health/infrastructure/postgres.health-check.ts` (`SELECT 1` num fork do EM) e
+- [X] T025 [P] [US2] Implementar `src/health/infrastructure/postgres.health-check.ts` (`SELECT 1` num fork do EM) e
   `src/health/infrastructure/sqs.health-check.ts` (`approximateCounts` das filas de transações, DLQ e eventos da
   configuração, em paralelo, pela `SqsPort` da 002), cada um devolvendo `up`/`down` sem lançar (R-39)
-- [ ] T026 [US2] Implementar `src/health/interfaces/http/health.controller.ts` (`@Controller('health')`, `@Public()`,
+- [X] T026 [US2] Implementar `src/health/interfaces/http/health.controller.ts` (`@Controller('health')`, `@Public()`,
   `GET live` e `GET ready`, status 200/503 definido no controller com o corpo próprio, `isDraining()` do
   `WORKER_REGISTRY`) e `src/health/health.module.ts`, registrado em `src/app.module.ts`
   ([contracts/http.md](contracts/http.md)). Faz o T021, o T022 e o T023 passarem
-- [ ] T027 [US2] Revisar o diff da US2 contra o `review-checklist.md`, com atenção a "Health correto" e à drenagem antes
+- [X] T027 [US2] Revisar o diff da US2 contra o `review-checklist.md`, com atenção a "Health correto" e à drenagem antes
   do `app.close()` (que o ack continua depois do commit e a devolução de visibilidade da 002 não muda); registrar item a
   item em `implementation-notes.md`
 

@@ -5,6 +5,8 @@ import { join } from 'node:path';
 
 const ROOT = join(import.meta.dir, '..', '..');
 const READY_TIMEOUT_MS = 60_000;
+/** Porta da app dentro do container (`PORT: "3000"` no profile `test` do Compose). */
+const CONTAINER_PORT = 3000;
 
 export type ContainerService = 'app-test' | 'app-test-init';
 
@@ -15,6 +17,11 @@ export interface ContainerInstance {
   wait(timeoutMs?: number): Promise<number>;
   logs(): Promise<string>;
   remove(): Promise<void>;
+  /**
+   * Lê `GET <path>` da própria app, de dentro do container (`docker exec … bun -e fetch`), na porta interna 3000 do
+   * profile `test`. Feature 003 (T023): prova o ready durante a drenagem sem expor porta no host.
+   */
+  fetchInside(path: string): Promise<{ status: number; body: string }>;
 }
 
 async function run(args: string[], options: { allowFailure?: boolean } = {}): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -74,6 +81,12 @@ export async function startContainerInstance(options: {
     },
     async remove() {
       await run(['docker', 'rm', '-f', id], { allowFailure: true });
+    },
+    async fetchInside(path) {
+      const script = `const r = await fetch('http://127.0.0.1:${CONTAINER_PORT}${path}'); console.log(JSON.stringify({ status: r.status, body: await r.text() }));`;
+      const out = await run(['docker', 'exec', id, 'bun', '-e', script]);
+      const line = out.stdout.trim().split('\n').pop() ?? '';
+      return JSON.parse(line) as { status: number; body: string };
     },
   };
 

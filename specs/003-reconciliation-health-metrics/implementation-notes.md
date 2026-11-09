@@ -100,3 +100,40 @@ módulo), `json-logger.ts` (chaves monetárias), os quatro arquivos de teste.
 `reconciliation-divergence.test.ts` 10 pass; `reconciliation-under-load.test.ts` 1 pass (169 + 143 + 153 leituras, todas
 consistentes). Suítes completas sobre a árvore do commit da US1: `bun run typecheck` ok; `bun run test:unit` 654 pass;
 `bun run test:integration` 242 pass em 164 s; `bun run test:concurrency` 24 pass em 75 s.
+
+## US2 — Health
+
+| # | Decisão | Motivo | Task |
+|---|---------|--------|------|
+| N3-20 | `withTimeout(check, ms, timers?)` recebe os temporizadores por parâmetro (padrão: os globais) e devolve `up`/`down`, nunca rejeita: o temporizador é cancelado no fim e uma checagem que termine depois do prazo é descartada com a rejeição tratada. | "Com relógio de teste" do T020 sem acoplar o application a um relógio novo; e nenhuma `unhandledRejection` quando a dependência responde (ou falha) depois dos 2 s (o T021 confere que não houve nenhuma). | T024 |
+| N3-21 | Checagem do SQS: `approximateCounts` (`GetQueueAttributes`) das três filas da configuração em paralelo; fila inexistente cai como erro do `GetQueueUrl` (N-01 da 002 não guarda a falha). O prazo de 2 s corta a espera do ready, mas a chamada do SDK continua até o próprio prazo (5 s por tentativa, 2 tentativas, N-22 da 002) e é descartada. | R-39. Cancelar a chamada exigiria mudar a `SqsPort` da 002; o descarte é suficiente para o ready responder no prazo. | T025 |
+| N3-22 | Checagem do PostgreSQL: `SELECT 1` num fork do EM, fora de transação (sem `lock_timeout`, que não se aplica). Limitação: com o banco pendurado (TCP aceito e sem resposta), cada consulta do ready segura uma conexão do pool até a conexão cair; consultas repetidas do ready durante um travamento longo podem ocupar várias conexões. O prazo do ready continua garantido (2 s). | O `statement_timeout` não ajuda quando o servidor não recebe nada; é o mesmo comportamento de qualquer consulta da app com o banco pendurado. Registrado para o ARCHITECTURE.md (limitações). | T025 |
+| N3-23 | `@Public()` no controller inteiro de health; o 503 é definido com `@Res({ passthrough: true })` e `status()`, devolvendo o corpo próprio, sem lançar exceção (fora do envelope do I-38). | R-41; contracts/http.md. | T026 |
+| N3-24 | T023: `ContainerInstance.fetchInside(path)` lê a app de dentro do container (`docker exec <id> bun -e "fetch('http://127.0.0.1:3000…')"`), na porta 3000 do profile `test`. O teste lê o ready antes do SIGTERM (200) e logo depois dele, com a mensagem ainda presa no lock (503 com `postgres` e `sqs` up, live 200, nenhuma linha de inbox); o resto do teste da 002 (conclusão, ack, saída 0, uma única vez, ordem dos logs) não mudou. Em vez do `Bun.sleep(1000)` entre o SIGTERM e a soltura do lock, o tempo das duas leituras `docker exec` faz esse papel. | Prova do E-1 e do SC-006 em container, nas duas variantes (sem e com init), sem publicar porta no host. | T023 |
+| N3-25 | Processo TDD: T020 e T021/T022 vistos vermelhos (módulo inexistente; 2 pass e 8 fail). O T023 não foi executado vermelho antes do código; em troca, a mutação "voltar ao `app.close()` da 002, sem drenagem antes e sem `beginShutdown`" derruba as duas variantes (ECONNREFUSED no ready lido de dentro do container: o HTTP fechou antes da drenagem). | Registro honesto, como no N-21 da 002. | T020–T023 |
+
+### Revisão da US2 contra o review-checklist.md (T027)
+
+Diff revisado: `src/health/**` (readiness, checagens, controller, módulo), `app.module.ts` (import do módulo),
+`test/support/container-instance.ts` (`fetchInside`), `test/concurrency/graceful-sigterm.test.ts`, `health.test.ts`,
+`health-shutdown.test.ts`, `readiness.test.ts`.
+
+| Item | Resultado | Evidência |
+|------|-----------|-----------|
+| Dinheiro sem `number` | N/A | Nenhum valor monetário em health. |
+| Nenhuma escrita nova | OK | Só `SELECT 1` e `GetQueueAttributes`; nenhum `INSERT`/`UPDATE`/`DELETE`/lock em `src/health/**` (varredura). |
+| Triggers presentes | N/A | Sem migration. |
+| Sem mock em integração e concorrência | OK | Indisponibilidade só por proxies TCP reais (cortado e pendurado) na frente do PostgreSQL e do MiniStack; SIGTERM real em container; o "em andamento" é um `FOR UPDATE` real. O temporizador manual só existe no unitário do `withTimeout`. |
+| Sem relógio nem id no domínio | OK | Nada de `new Date()`, `Date.now(`, `Math.random(` em `src/health/**`; o único tempo é o temporizador do prazo, injetável. |
+| Erros no envelope único | OK | Health fica fora do envelope por definição (I-75): 200/503 com corpo próprio, conferido no T021 (`error` ausente). |
+| Health correto | OK | live não consulta nada (200 com o banco cortado ou pendurado, em < 500 ms); ready com `Promise.all` das duas checagens, 2 s cada (pendurado: 503 entre 1,9 e 3 s); 503 com o estado real de cada dependência; 503 desde o instante do encerramento (`beginShutdown` síncrono no sinal, E-1) e durante toda a drenagem, em processo (T022) e em container nas duas variantes (T023); drenagem antes do `app.close()` (o HTTP continua atendendo `GET /wallets/:id` e `/health/live` durante a drenagem); log em `debug`. O ack continua depois do commit (a mensagem em andamento conclui com `consumer.message` `processed` antes de `shutdown.workers_drained`, fila vazia, uma linha de inbox) e a devolução de visibilidade da 002 não mudou (`consumer.message_returned` ausente no caminho feliz; `consumer-shutdown.test.ts` da 002 verde). |
+| Métricas de baixa cardinalidade e sem dinheiro | N/A | Health não registra métrica. |
+| Endpoints sem autenticação | OK | `@Public()` no controller; T021 chama sem nenhum header. |
+| Reconciliação / divergência | N/A | — |
+
+### Checkpoint da US2
+
+`readiness.test.ts` 15 pass; `health.test.ts` + `health-shutdown.test.ts` 10 pass; `graceful-sigterm.test.ts` +
+`signal-exit.test.ts` 4 pass (container, com e sem init). Suítes completas sobre a árvore do commit da US2:
+`bun run typecheck` ok; `bun run test:unit` 669 pass; `bun run test:integration` 252 pass em 170 s;
+`bun run test:concurrency` 24 pass em 76 s.

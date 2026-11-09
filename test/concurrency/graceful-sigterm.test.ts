@@ -1,8 +1,11 @@
 // T078 — término gracioso com SIGTERM real em container Linux (FR-014; I-34; SC-007; R-30, R-35), com a app como PID 1
 // (`app-test`) e atrás do init do Docker (`app-test-init`), consumidor ligado. Uma mensagem fica em andamento, presa no
-// lock da wallet segurado por fora (FOR UPDATE real); o SIGTERM chega; o lock é solto 1 s depois. A instância conclui a
+// lock da wallet segurado por fora (FOR UPDATE real); o SIGTERM chega; o lock é solto depois. A instância conclui a
 // mensagem, confirma (ack depois do commit) e sai com 0; a mensagem é processada uma única vez. PostgreSQL e MiniStack
 // reais.
+// T023 da 003 (FR-016; SC-006; R-40 e o requisito E-1): antes do SIGTERM o ready, lido de dentro do container, é 200;
+// depois do SIGTERM e antes de soltar o lock (a drenagem está esperando a mensagem), ele é 503 com as dependências up e o
+// live continua 200. O resto do teste não muda.
 import { afterAll, describe, expect, test } from 'bun:test';
 import { startApp, type RunningApp } from '../support/app-harness.ts';
 import { assertWalletMatchesLedger } from '../support/assert-wallet-matches-ledger.ts';
@@ -85,9 +88,19 @@ describe.each(['app-test', 'app-test-init'] as ContainerService[])('%s', (servic
         await waitFor(async () => (await counts(queues.urls.transactions)).notVisible === 1, 30_000, 100);
         await Bun.sleep(300);
 
+        const READY_UP = { status: 'ok', checks: { postgres: 'up', sqs: 'up' } };
+        const before = await instance.fetchInside('/health/ready');
+        expect(before.status).toBe(200);
+        expect(JSON.parse(before.body)).toEqual(READY_UP);
+
         const sentAt = performance.now();
         await instance.kill('SIGTERM');
-        await Bun.sleep(1_000);
+        // Durante a drenagem (a mensagem continua presa no lock): ready 503 com o estado real, live 200.
+        const draining = await instance.fetchInside('/health/ready');
+        expect(draining.status).toBe(503);
+        expect(JSON.parse(draining.body)).toEqual({ status: 'unavailable', checks: { postgres: 'up', sqs: 'up' } });
+        expect((await instance.fetchInside('/health/live')).status).toBe(200);
+        expect(await database.db.query('SELECT 1 FROM inbox_messages WHERE message_id = ?', [envelope.messageId])).toHaveLength(0);
         await release();
         const code = await instance.wait(SHUTDOWN_TIMEOUT_MS + 15_000);
         const elapsed = performance.now() - sentAt;

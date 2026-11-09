@@ -18,6 +18,7 @@ import { CLOCK } from './shared-kernel/domain/clock.port.ts';
 import { ID_GENERATOR } from './shared-kernel/domain/id-generator.port.ts';
 import { SystemClock } from './shared-kernel/infrastructure/system-clock.ts';
 import { UuidV7IdGenerator } from './shared-kernel/infrastructure/uuidv7-id-generator.ts';
+import { HealthModule } from './health/health.module.ts';
 import { MessagingModule } from './messaging/messaging.module.ts';
 import { OutboxModule } from './outbox/outbox.module.ts';
 import { ReconciliationModule } from './reconciliation/reconciliation.module.ts';
@@ -76,7 +77,7 @@ export class AppModule {
     return {
       module: AppModule,
       global: true,
-      imports: [WalletsModule, WageringModule, MessagingModule, OutboxModule, ReconciliationModule],
+      imports: [WalletsModule, WageringModule, MessagingModule, OutboxModule, ReconciliationModule, HealthModule],
       providers,
       exports: [
         APP_CONFIG,
