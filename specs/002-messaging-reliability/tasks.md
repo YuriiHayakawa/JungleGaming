@@ -52,10 +52,10 @@ ao fim de todo teste que toca wallet. Novas:
 
 **Purpose**: dependência nova, variáveis de ambiente e o emulador no Compose.
 
-- [ ] T001 Acrescentar em `package.json` a dependência `"@aws-sdk/client-sqs": "3.1156.0"` (versão exata, sem `^`/`~`,
+- [X] T001 Acrescentar em `package.json` a dependência `"@aws-sdk/client-sqs": "3.1156.0"` (versão exata, sem `^`/`~`,
   research §1, R-20) e o script `"queue:init": "bun scripts/queue-init.ts"`; rodar `bun install` e commitar o
   `bun.lock` atualizado
-- [ ] T002 [P] Acrescentar ao `.env.example` as variáveis do research R-27 com os padrões: `SQS_ENDPOINT=http://localhost:4566`,
+- [X] T002 [P] Acrescentar ao `.env.example` as variáveis do research R-27 com os padrões: `SQS_ENDPOINT=http://localhost:4566`,
   `AWS_REGION=us-east-1`, `AWS_ACCESS_KEY_ID=test`, `AWS_SECRET_ACCESS_KEY=test`,
   `SQS_TRANSACTIONS_QUEUE=wager-transactions.fifo`, `SQS_TRANSACTIONS_DLQ=wager-transactions-dlq.fifo`,
   `SQS_EVENTS_QUEUE=wager-events.fifo`, `CONSUMER_ENABLED=false`, `PUBLISHER_ENABLED=false`,
@@ -65,7 +65,7 @@ ao fim de todo teste que toca wallet. Novas:
   `PUBLISHER_BACKOFF_MIN_MS=1000`, `PUBLISHER_BACKOFF_MAX_MS=60000`, `PENDING_WORKER_BATCH_SIZE=10`,
   `PENDING_WORKER_LEASE_MS=30000`, `PENDING_WORKER_POLL_MS=1000`, `PENDING_MAX_ATTEMPTS=10`, `PENDING_TTL_MS=600000`,
   `PENDING_BACKOFF_BASE_MS=5000`, `PENDING_BACKOFF_MAX_MS=60000`, `PENDING_JITTER_RATIO=0.2` (FR-032, I-21, I-64, I-65)
-- [ ] T003 [P] Atualizar `docker-compose.yml` (plan, "Deploy local"; research §0.4):
+- [X] T003 [P] Atualizar `docker-compose.yml` (plan, "Deploy local"; research §0.4):
   - serviço `sqs`: `image: ministackorg/ministack:1.5.32`, porta `4566:4566`, healthcheck
     `["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4566/_localstack/health')"]`
     (a imagem não tem `curl`, `wget` nem `aws` CLI);
@@ -91,64 +91,64 @@ teste de fila.
 
 ### Testes de fundação (escrever primeiro; devem falhar)
 
-- [ ] T004 [P] Estender `test/unit/app-config.test.ts` (FR-032, R-27): lê as variáveis do T002 com os padrões; booleanos
+- [X] T004 [P] Estender `test/unit/app-config.test.ts` (FR-032, R-27): lê as variáveis do T002 com os padrões; booleanos
   só `true`/`false`; nomes de fila terminam em `.fifo`; `PUBLISHER_BATCH_SIZE` e `PENDING_WORKER_BATCH_SIZE` de 1 a 10;
   `PENDING_JITTER_RATIO` de 0 a 0,5; `CONSUMER_WAIT_SECONDS` de 1 a 20; recusa (lança) quando
   `CONSUMER_VISIBILITY_TIMEOUT_SECONDS × 1000 ≤ DB_POOL_ACQUIRE_TIMEOUT_MS + WALLET_LOCK_TIMEOUT_MS + 2000`, quando
   `PUBLISHER_LEASE_MS` ou `PENDING_WORKER_LEASE_MS` não passam do mesmo limite, quando
   `CONSUMER_RETRY_BASE_SECONDS > CONSUMER_RETRY_MAX_SECONDS` e quando `CONSUMER_SHUTDOWN_TIMEOUT_MS > 25000` (prazo + 5 s
   de margem precisa caber nos 30 s do `stop_grace_period`)
-- [ ] T005 [P] Estender `test/unit/failpoints.test.ts` (I-40, R-29): `after_commit_before_ack` e `before_publish_mark`
+- [X] T005 [P] Estender `test/unit/failpoints.test.ts` (I-40, R-29): `after_commit_before_ack` e `before_publish_mark`
   chamam o `exit` injetado no modo padrão; `after_pending_resolution_before_commit` lança `FailpointError` no modo padrão
   e, no modo `invariant_violation`, um erro com `code` `P0001` que `classifyDbError` classifica como `invariant`;
   `NODE_ENV=production` desliga os três; modo desconhecido recusa o boot
-- [ ] T006 [P] Escrever `test/unit/inbox-message.test.ts` (enunciado §6.5; data-model §1): `InboxMessage.receive` com
+- [X] T006 [P] Escrever `test/unit/inbox-message.test.ts` (enunciado §6.5; data-model §1): `InboxMessage.receive` com
   `messageId` "1 a 128 caracteres em `[A-Za-z0-9._:-]`", `consumerName` "1 a 64 caracteres", `payloadHash`
   `^[0-9a-f]{64}$` e `transactionId` UUID, recusando o resto; `markProcessed(at)` uma vez só (a segunda lança
   `InvalidTransactionStateError`); `isProcessed`, `matchesPayload`; `rehydrate` sem revalidar (I-28, I-69)
-- [ ] T007 [P] Escrever `test/unit/pending-reference-policy.test.ts` (I-21, I-64, I-72, R-25): com `random` fixo em 0,5
+- [X] T007 [P] Escrever `test/unit/pending-reference-policy.test.ts` (I-21, I-64, I-72, R-25): com `random` fixo em 0,5
   (sem efeito de jitter) as esperas antes das tentativas 2 a 10 são 10, 20, 40, 60, 60, 60, 60, 60, 60 s e a 10ª
   acontece 435 s depois da criação (5 s da 001 + a soma); o jitter fica em `[1 − r, 1 + r]` para `random` 0 e 0,999;
   `isExhausted` é verdadeiro com 10 tentativas depois desta avaliação ou com `now − createdAt ≥ ttlMs` (10 min), e falso
   antes; os limites vêm da configuração
-- [ ] T008 [P] Estender `test/unit/wager-transaction.test.ts` (I-11, I-67): `scheduleNextReferenceAttempt(nextAt, at)`
+- [X] T008 [P] Estender `test/unit/wager-transaction.test.ts` (I-11, I-67): `scheduleNextReferenceAttempt(nextAt, at)`
   só a partir de PENDING_REFERENCE (incrementa `referenceAttempts`, define `nextReferenceAttemptAt`, mantém o status;
   em PENDING, PROCESSED, REJECTED ou FAILED lança `InvalidTransactionStateError`); `markProcessed`, `reject` e `fail` a
   partir de PENDING_REFERENCE deixam `nextReferenceAttemptAt` nulo, preservam `referenceAttempts` e (no
   `markProcessed`) reescrevem `observedBalance` e `referenceTransactionId`; `correlationId` nunca muda
-- [ ] T009 [P] Escrever `test/unit/wager-message-envelope.test.ts` (FR-002, I-57, I-60, I-66, I-69,
+- [X] T009 [P] Escrever `test/unit/wager-message-envelope.test.ts` (FR-002, I-57, I-60, I-66, I-69,
   `contracts/wager-transaction-requested.schema.json`): o exemplo do contrato é aceito; corpo que não é JSON, envelope
   sem `messageId`, `type`, `occurredAt` ou `data`, `messageId` vazio, com 129 caracteres ou com caractere fora de
   `[A-Za-z0-9._:-]` e `occurredAt` não ISO-8601 → `MALFORMED_MESSAGE`; `type` "Other" com envelope válido →
   `UNSUPPORTED_MESSAGE_TYPE`; `data` com `amount` numérico, sem `idempotencyKey`, com autorreferência ou `providerId`
   "system" → `VALIDATION_ERROR`; `kind` OPENING → `OPENING_NOT_ALLOWED`; campos desconhecidos descartados; `walletId` em
   maiúsculas normalizado
-- [ ] T010 [P] Escrever `test/unit/in-memory-metrics.test.ts` (FR-036, R-32): `increment(name, labels)` e
+- [X] T010 [P] Escrever `test/unit/in-memory-metrics.test.ts` (FR-036, R-32): `increment(name, labels)` e
   `observe(name, value, labels)` acumulam por nome e rótulos; `snapshot()` devolve contadores e observações; nomes
   aceitos: `transactions_total`, `duplicates_total`, `retries_total`, `dlq_total`, `lock_conflicts_total`,
   `outbox_lag_ms`, `processing_latency_ms`; nome desconhecido lança erro
-- [ ] T011 [P] Escrever `test/unit/polling-loop.test.ts` (FR-014, FR-015, FR-033, R-28): o `PollingLoop` executa a
+- [X] T011 [P] Escrever `test/unit/polling-loop.test.ts` (FR-014, FR-015, FR-033, R-28): o `PollingLoop` executa a
   iteração, espera o intervalo, aplica backoff de 1 a 30 s quando a iteração lança erro de indisponibilidade, para no
   `stop()` abortando o `AbortSignal` repassado à iteração, e `drain(timeoutMs)` espera a iteração em andamento até o
   prazo; o `WorkerRegistry` registra trabalhadores e `drainAll()` para e drena todos (com iterações de teste, sem banco
   nem fila)
-- [ ] T012 [P] Escrever `test/unit/signal-handler.test.ts` (FR-014, I-34, R-35), com `process`, `exit` e temporizadores
+- [X] T012 [P] Escrever `test/unit/signal-handler.test.ts` (FR-014, I-34, R-35), com `process`, `exit` e temporizadores
   injetados: `SIGTERM` e `SIGINT` chamam `close()` e depois `exit(0)`; um segundo sinal durante o encerramento é
   ignorado (`close()` chamado uma vez); `close()` que rejeita → `exit(1)`; `close()` que não termina → `exit(1)` depois
   de `CONSUMER_SHUTDOWN_TIMEOUT_MS` + 5000; o temporizador de segurança não segura o processo (`unref`)
-- [ ] T013 [P] Estender `test/unit/pg-errors.test.ts` (I-28, R-22): `23505` com `constraint` `inbox_messages_pk` →
+- [X] T013 [P] Estender `test/unit/pg-errors.test.ts` (I-28, R-22): `23505` com `constraint` `inbox_messages_pk` →
   `inbox-race`; os casos da 001 continuam iguais
-- [ ] T014 [P] Escrever `test/integration/queue-init.test.ts` (plan "Deploy local"; I-29, I-30), contra o MiniStack do
+- [X] T014 [P] Escrever `test/integration/queue-init.test.ts` (plan "Deploy local"; I-29, I-30), contra o MiniStack do
   Compose com um prefixo único de nomes: `bun scripts/queue-init.ts` via `Bun.spawn` termina com 0 e cria
   `<prefixo>wager-transactions-dlq.fifo`, `<prefixo>wager-transactions.fifo` (com `RedrivePolicy` para a DLQ e
   `maxReceiveCount` 5) e `<prefixo>wager-events.fifo`, todas com `FifoQueue=true` e `ContentBasedDeduplication=false`;
   rodar de novo termina com 0 sem erro nem fila duplicada; com `SQS_ENDPOINT` inválido termina com código ≠ 0; apaga
   as filas no fim
-- [ ] T015 [P] Estender `test/integration/migrations.test.ts` (constitution V; data-model §2.3): `up → down → up` passa a
+- [X] T015 [P] Estender `test/integration/migrations.test.ts` (constitution V; data-model §2.3): `up → down → up` passa a
   conferir no catálogo `inbox_messages`, `inbox_transaction_idx`, os triggers `inbox_no_update_delete_trg` e
   `inbox_no_truncate_trg`, e os índices `wager_tx_pending_due_idx` e `wager_tx_pending_by_reference_idx` (e a ausência
   deles depois do `down`)
-- [ ] T016 [P] Estender `test/integration/schema-guards.test.ts` (data-model §2.1; I-28, I-69; arquivo da lista de
+- [X] T016 [P] Estender `test/integration/schema-guards.test.ts` (data-model §2.1; I-28, I-69; arquivo da lista de
   permitidos do T118 da 001): `inbox_messages_pk` barra o mesmo `(consumer_name, message_id)`; `inbox_message_id_ck`
   recusa `message_id` fora de `^[A-Za-z0-9._:-]{1,128}$`; `inbox_payload_hash_ck`, `inbox_consumer_name_ck` e
   `inbox_processed_after_ck` recusam valores inválidos; a FK recusa `transaction_id` inexistente; `UPDATE`, `DELETE` e
@@ -156,75 +156,75 @@ teste de fila.
 
 ### Implementação da fundação
 
-- [ ] T017 [P] Criar `migrations/Migration20261108000100.ts`: `up` copia literalmente o DDL de data-model §2.1
+- [X] T017 [P] Criar `migrations/Migration20261108000100.ts`: `up` copia literalmente o DDL de data-model §2.1
   (`inbox_messages` com `consumer_name varchar(64)`, `message_id varchar(128)`, `payload_hash char(64)`,
   `transaction_id uuid NOT NULL REFERENCES wager_transactions (id)`, `received_at` e `processed_at timestamptz NOT NULL`,
   `inbox_messages_pk PRIMARY KEY (consumer_name, message_id)`, os quatro `CHECK`s, `inbox_transaction_idx` e os dois
   triggers com `jg_forbid_mutation`); `down` remove triggers e tabela na ordem inversa; um `addSql` por comando
-- [ ] T018 [P] Criar `migrations/Migration20261108000200.ts`: `up` com os dois índices parciais de data-model §2.2
+- [X] T018 [P] Criar `migrations/Migration20261108000200.ts`: `up` com os dois índices parciais de data-model §2.2
   (`wager_tx_pending_due_idx ON wager_transactions (next_reference_attempt_at, created_at) WHERE status =
   'PENDING_REFERENCE'` e `wager_tx_pending_by_reference_idx ON wager_transactions (provider_id,
   reference_external_transaction_id, created_at) WHERE status = 'PENDING_REFERENCE'`); `down` remove os dois
-- [ ] T019 Registrar as duas migrations em `MIGRATIONS` de `src/platform/persistence/mikro-orm.config.ts`, depois das
+- [X] T019 Registrar as duas migrations em `MIGRATIONS` de `src/platform/persistence/mikro-orm.config.ts`, depois das
   quatro da 001; o template de teste (`test/support/db-setup.preload.ts`) passa a aplicá-las sem mudança de código. Faz o
   T015 e o T016 passarem
-- [ ] T020 [P] Implementar `src/inbox/domain/inbox-message.ts` (data-model §1) e
+- [X] T020 [P] Implementar `src/inbox/domain/inbox-message.ts` (data-model §1) e
   `src/inbox/infrastructure/{inbox-message.schema.ts, inbox-message.mapper.ts, mikro-orm-inbox.repository.ts}`
   (`insert(em, inbox)` e `findByConsumerAndMessageId(em, consumerName, messageId)`, EM por chamada, R-19), registrando o
   schema em `src/platform/persistence/entity-schemas.ts`. Faz o T006 passar
-- [ ] T021 [P] Implementar `src/wagering/domain/pending-reference-policy.ts` (R-25) e
+- [X] T021 [P] Implementar `src/wagering/domain/pending-reference-policy.ts` (R-25) e
   `src/platform/random/{random-source.port.ts, crypto-random-source.ts}` (porta `RANDOM_SOURCE`, `next()` em `[0, 1)`,
   com `crypto.getRandomValues`), mais o double `FixedRandom` em `test/support/fakes.ts`. Faz o T007 passar
-- [ ] T022 Implementar em `src/wagering/domain/wager-transaction.ts` o `scheduleNextReferenceAttempt` e o
+- [X] T022 Implementar em `src/wagering/domain/wager-transaction.ts` o `scheduleNextReferenceAttempt` e o
   `nextReferenceAttemptAt` nulo ao sair de PENDING_REFERENCE (data-model §1); ajustar
   `src/wagering/infrastructure/wager-transaction.mapper.ts` se preciso. Faz o T008 passar sem quebrar os testes da 001
-- [ ] T023 [P] Implementar `src/platform/metrics/{metrics.port.ts, in-memory-metrics.ts}` (porta `METRICS`, R-32) e
+- [X] T023 [P] Implementar `src/platform/metrics/{metrics.port.ts, in-memory-metrics.ts}` (porta `METRICS`, R-32) e
   registrar o provider no `src/app.module.ts`. Faz o T010 passar
-- [ ] T024 Implementar em `src/platform/config/app-config.ts` as variáveis e a hierarquia do T004 (R-27). Faz o T004
+- [X] T024 Implementar em `src/platform/config/app-config.ts` as variáveis e a hierarquia do T004 (R-27). Faz o T004
   passar
-- [ ] T025 [P] Implementar em `src/platform/failpoints/failpoints.ts` os três failpoints novos e o modo
+- [X] T025 [P] Implementar em `src/platform/failpoints/failpoints.ts` os três failpoints novos e o modo
   `invariant_violation` (R-29). Faz o T005 passar
-- [ ] T026 [P] Acrescentar em `src/platform/persistence/pg-errors.ts` o `inbox_messages_pk` → `inbox-race`. Faz o T013
+- [X] T026 [P] Acrescentar em `src/platform/persistence/pg-errors.ts` o `inbox_messages_pk` → `inbox-race`. Faz o T013
   passar
-- [ ] T027 Criar a porta `src/messaging/application/sqs.port.ts` (`SQS_PORT`: `receive(queue, { max, waitSeconds,
+- [X] T027 Criar a porta `src/messaging/application/sqs.port.ts` (`SQS_PORT`: `receive(queue, { max, waitSeconds,
   visibilitySeconds?, signal })` devolvendo `messageId`, `receiptHandle`, `body`, `receiveCount`, `groupId` e atributos;
   `delete`; `changeVisibility`; `send(queue, { body, groupId, deduplicationId, attributes })`; `approximateCounts`) e o
   adapter `src/messaging/infrastructure/aws-sqs.adapter.ts`, único arquivo de `src/` que importa
   `@aws-sdk/client-sqs`, com URLs resolvidas por nome no boot e `abortSignal` no long polling (R-21; spike S-12.7)
-- [ ] T028 Criar `src/messaging/infrastructure/queue-provisioning.ts` (`provisionQueues(client, names)`: DLQ, principal com
+- [X] T028 Criar `src/messaging/infrastructure/queue-provisioning.ts` (`provisionQueues(client, names)`: DLQ, principal com
   `RedrivePolicy` `maxReceiveCount` 5 e eventos, todas FIFO com `ContentBasedDeduplication=false`; idempotente:
   `CreateQueue` com os mesmos atributos e `SetQueueAttributes` quando divergem) e `scripts/queue-init.ts` (lê
   `SQS_ENDPOINT` e os nomes, chama `provisionQueues`, sai com 0 ou ≠ 0). Faz o T014 passar
-- [ ] T029 [P] Criar `test/support/fake-sqs.ts`: `SqsPort` em memória para **testes unitários apenas** (visibilidade,
+- [X] T029 [P] Criar `test/support/fake-sqs.ts`: `SqsPort` em memória para **testes unitários apenas** (visibilidade,
   `receiveCount`, grupo FIFO bloqueado, DLQ capturada, falha injetável), com comentário de que é proibido em
   `test/integration/**` e `test/concurrency/**` (T084)
-- [ ] T030 [P] Criar `test/support/test-queues.ts` (`useTestQueues(tag)`: no `beforeAll`, `provisionQueues` com prefixo
+- [X] T030 [P] Criar `test/support/test-queues.ts` (`useTestQueues(tag)`: no `beforeAll`, `provisionQueues` com prefixo
   `jg-<tag>-<aleatório>-`; expõe nomes, URLs e o env para as instâncias; no `afterAll`, apaga as filas; sem `PurgeQueue`;
   R-31) e `test/support/sqs-client.ts` (enviar envelope com grupo e deduplicação, receber tudo de uma fila, ler a DLQ com
   atributos, contar `ApproximateNumberOfMessages` e `...NotVisible`, esperar a fila esvaziar)
-- [ ] T031 Implementar `src/platform/workers/{polling-loop.ts, worker-registry.ts}` (R-28) e fazer o `OrmLifecycle`
+- [X] T031 Implementar `src/platform/workers/{polling-loop.ts, worker-registry.ts}` (R-28) e fazer o `OrmLifecycle`
   (`src/platform/persistence/orm.provider.ts`) chamar `registry.drainAll()` antes de `orm.close()`. Faz o T011 passar
-- [ ] T032 Implementar `src/platform/lifecycle/signal-handler.ts` (`installShutdownSignals`, R-35) e trocar no
+- [X] T032 Implementar `src/platform/lifecycle/signal-handler.ts` (`installShutdownSignals`, R-35) e trocar no
   `src/main.ts` o `app.enableShutdownHooks()` pelo handler: `SIGTERM` e `SIGINT` → `app.close()` → `process.exit(0)`;
   sinal repetido ignorado; temporizador de segurança de `CONSUMER_SHUTDOWN_TIMEOUT_MS` + 5000 → `process.exit(1)`; erro
   no `close()` → `process.exit(1)`. Faz o T012 passar e mantém verdes os testes da 001 que usam `app.close()`
-- [ ] T033 Estender `test/support/app-harness.ts` e `test/support/instance-cluster.ts` para aceitar papéis
+- [X] T033 Estender `test/support/app-harness.ts` e `test/support/instance-cluster.ts` para aceitar papéis
   (`CONSUMER_ENABLED`, `PUBLISHER_ENABLED`, `PENDING_WORKER_ENABLED`) e o env das filas de `useTestQueues`, com papéis
   desligados por padrão; o `RunningApp` expõe `app.get(METRICS)` e o `SqsPort` (R-27, R-31)
-- [ ] T034 [P] Criar `test/support/container-instance.ts` (R-30): `startContainerInstance({ service: 'app-test' |
+- [X] T034 [P] Criar `test/support/container-instance.ts` (R-30): `startContainerInstance({ service: 'app-test' |
   'app-test-init', env })` constrói a imagem uma vez (`docker compose --profile test build`), sobe com `docker compose
   --profile test run -d` na rede do Compose (PostgreSQL em `postgres:5432` com o banco do arquivo, MiniStack em
   `sqs:4566`), espera a linha `http.listening` no log, expõe `kill(signal)`, `wait()` (código de saída), `logs()` e
   remove o container no fim
-- [ ] T035 Escrever `test/concurrency/signal-exit.test.ts` (FR-014, I-34, R-35; spike S-12.8): com `app-test` (sem
+- [X] T035 Escrever `test/concurrency/signal-exit.test.ts` (FR-014, I-34, R-35; spike S-12.8): com `app-test` (sem
   `init`, a app é o PID 1) e com `app-test-init` (`init: true`), `SIGTERM` → o log mostra o encerramento (drain do
   `WorkerRegistry` e fechamento do ORM) e a saída é 0 em menos de `CONSUMER_SHUTDOWN_TIMEOUT_MS` + 5 s; um segundo
   `SIGTERM` durante o encerramento não muda o resultado. A drenagem de mensagem em andamento entra no T078 (US5)
-- [ ] T036 Implementar `src/messaging/application/wager-message.envelope.ts` (FR-002, I-66, I-69,
+- [X] T036 Implementar `src/messaging/application/wager-message.envelope.ts` (FR-002, I-66, I-69,
   `contracts/wager-transaction-requested.schema.json`): schema Zod do envelope, reaproveitando o schema de submissão da
   001 para `data` (com `idempotencyKey` 1 a 255), e a tradução de erro para o código de DLQ (`MALFORMED_MESSAGE`,
   `UNSUPPORTED_MESSAGE_TYPE`, `VALIDATION_ERROR`, `OPENING_NOT_ALLOWED`; I-70). Faz o T009 passar
-- [ ] T037 Acrescentar `messageId` e `causationId` ao contexto de requisição (`src/platform/correlation/request-context.ts`)
+- [X] T037 Acrescentar `messageId` e `causationId` ao contexto de requisição (`src/platform/correlation/request-context.ts`)
   e `messageId` às linhas do `src/platform/logging/json-logger.ts`, com teste em `test/unit/json-logger.test.ts`
   (FR-037, I-69)
 

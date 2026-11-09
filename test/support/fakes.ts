@@ -1,6 +1,18 @@
 // Doubles determinísticos de teste (constitution VI). Não substituem banco nem fila em nenhum teste.
 import type { Clock } from '../../src/shared-kernel/domain/clock.port.ts';
 import type { IdGenerator } from '../../src/shared-kernel/domain/id-generator.port.ts';
+import type { RandomSource } from '../../src/platform/random/random-source.port.ts';
+
+/** Aleatoriedade fixa para o jitter (R-25): 0,5 não altera a espera nominal. */
+export class FixedRandom implements RandomSource {
+  constructor(private readonly value = 0.5) {
+    if (!(value >= 0 && value < 1)) throw new Error('FixedRandom value must be in [0, 1)');
+  }
+
+  next(): number {
+    return this.value;
+  }
+}
 
 export class FixedClock implements Clock {
   private current: number;

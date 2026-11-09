@@ -71,3 +71,33 @@ test('níveis error, warn e debug e a interface LoggerService do Nest', () => {
   expect(w).toMatchObject({ level: 'warn', msg: 'cuidado' });
   expect(l).toMatchObject({ level: 'info', msg: 'via Nest', context: 'SomeContext' });
 });
+
+// ---- feature 002 (T037; FR-037, I-69)
+
+test('na fila, inclui messageId e causationId do contexto; correlationId = messageId', () => {
+  const { logger, parsed } = capture();
+  runWithRequestContext({ correlationId: 'msg-1', messageId: 'msg-1', causationId: 'msg-1' }, () => {
+    setRequestContextValues({ walletId: 'w-1', providerId: 'p-1', transactionId: 't-1' });
+    logger.info('consumer.message', { outcome: 'processed', money: { amount: '25.00', currency: 'BRL' } });
+  });
+  const [line] = parsed();
+  expect(line).toMatchObject({
+    correlationId: 'msg-1',
+    messageId: 'msg-1',
+    causationId: 'msg-1',
+    walletId: 'w-1',
+    providerId: 'p-1',
+    transactionId: 't-1',
+    outcome: 'processed',
+  });
+  expect(line).not.toHaveProperty('money');
+  expect(JSON.stringify(line)).not.toContain('25.00');
+});
+
+test('no HTTP, sem messageId nem causationId', () => {
+  const { logger, parsed } = capture();
+  runWithRequestContext({ correlationId: 'corr-1' }, () => logger.info('http'));
+  const [line] = parsed();
+  expect(line).not.toHaveProperty('messageId');
+  expect(line).not.toHaveProperty('causationId');
+});

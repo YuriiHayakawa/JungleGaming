@@ -304,3 +304,81 @@ describe('rehydrate', () => {
     expect(() => tx.markProcessed(undefined, brl('1.00'), at())).toThrow(InvalidTransactionStateError);
   });
 });
+
+// ---- feature 002 (T008; I-11, I-67)
+
+describe('scheduleNextReferenceAttempt e saída de PENDING_REFERENCE', () => {
+  const pendingReference = (attemptsBefore = 0) => {
+    const tx = pending(Kind.Refund);
+    tx.markPendingReference(brl('100.00'), new Date(at().getTime() + 5000), at());
+    for (let i = 0; i < attemptsBefore; i++) tx.scheduleNextReferenceAttempt(new Date(at().getTime() + 10_000), at());
+    return tx;
+  };
+
+  test('a partir de PENDING_REFERENCE: incrementa attempts, define a próxima hora e mantém o status', () => {
+    const tx = pendingReference();
+    const next = new Date(at().getTime() + 10_000);
+    const when = new Date(at().getTime() + 1);
+    tx.scheduleNextReferenceAttempt(next, when);
+    expect(tx.status).toBe(Status.PendingReference);
+    expect(tx.referenceAttempts).toBe(1);
+    expect(tx.nextReferenceAttemptAt?.getTime()).toBe(next.getTime());
+    expect(tx.updatedAt.getTime()).toBe(when.getTime());
+    tx.scheduleNextReferenceAttempt(new Date(next.getTime() + 20_000), when);
+    expect(tx.referenceAttempts).toBe(2);
+    expect(tx.observedBalance?.amount).toBe('100.00');
+  });
+
+  test('copia a data recebida', () => {
+    const tx = pendingReference();
+    const next = new Date(at().getTime() + 10_000);
+    tx.scheduleNextReferenceAttempt(next, at());
+    next.setTime(0);
+    expect(tx.nextReferenceAttemptAt?.getTime()).toBe(at().getTime() + 10_000);
+  });
+
+  test('em PENDING, PROCESSED, REJECTED ou FAILED lança InvalidTransactionStateError', () => {
+    const next = new Date(at().getTime() + 10_000);
+    expect(() => pending(Kind.Refund).scheduleNextReferenceAttempt(next, at())).toThrow(InvalidTransactionStateError);
+    const processed = pending(Kind.Win);
+    processed.markProcessed(undefined, brl('1.00'), at());
+    expect(() => processed.scheduleNextReferenceAttempt(next, at())).toThrow(InvalidTransactionStateError);
+    const rejected = pending();
+    rejected.reject(FailureCode.InsufficientFunds, brl('1.00'), at());
+    expect(() => rejected.scheduleNextReferenceAttempt(next, at())).toThrow(InvalidTransactionStateError);
+    const failed = pendingReference();
+    failed.fail(FailureCode.InternalError, at());
+    expect(() => failed.scheduleNextReferenceAttempt(next, at())).toThrow(InvalidTransactionStateError);
+  });
+
+  test('markProcessed a partir de PENDING_REFERENCE: próxima tentativa nula, attempts preservado, saldo e referência reescritos (I-67)', () => {
+    const tx = pendingReference(3);
+    const correlationId = tx.correlationId;
+    tx.markProcessed('bet-internal-id', brl('125.00'), at());
+    expect(tx.status).toBe(Status.Processed);
+    expect(tx.nextReferenceAttemptAt).toBeUndefined();
+    expect(tx.referenceAttempts).toBe(3);
+    expect(tx.observedBalance?.amount).toBe('125.00');
+    expect(tx.referenceTransactionId).toBe('bet-internal-id');
+    expect(tx.correlationId).toBe(correlationId);
+  });
+
+  test('reject a partir de PENDING_REFERENCE: próxima tentativa nula, attempts preservado', () => {
+    const tx = pendingReference(2);
+    tx.reject(FailureCode.ReferenceNotFound, brl('100.00'), at());
+    expect(tx.status).toBe(Status.Rejected);
+    expect(tx.failureCode).toBe(FailureCode.ReferenceNotFound);
+    expect(tx.nextReferenceAttemptAt).toBeUndefined();
+    expect(tx.referenceAttempts).toBe(2);
+    expect(tx.correlationId).toBe('corr-1');
+  });
+
+  test('fail a partir de PENDING_REFERENCE: próxima tentativa nula, attempts preservado', () => {
+    const tx = pendingReference(1);
+    tx.fail(FailureCode.InternalError, at());
+    expect(tx.status).toBe(Status.Failed);
+    expect(tx.nextReferenceAttemptAt).toBeUndefined();
+    expect(tx.referenceAttempts).toBe(1);
+    expect(tx.correlationId).toBe('corr-1');
+  });
+});

@@ -81,8 +81,9 @@ const TERMINAL = new Set([WagerTransactionStatus.Processed, WagerTransactionStat
  *   PENDING → PROCESSED | REJECTED | PENDING_REFERENCE | FAILED
  *   PENDING_REFERENCE → PROCESSED | REJECTED | FAILED
  * PROCESSED, REJECTED e FAILED são terminais: qualquer transição a partir deles lança InvalidTransactionStateError
- * (erro de programação, não caminho de negócio). As novas tentativas de uma PENDING_REFERENCE (só attempts e
- * nextAttemptAt) são do worker da feature 2.
+ * (erro de programação, não caminho de negócio). As novas tentativas de uma PENDING_REFERENCE só mudam attempts e
+ * nextAttemptAt (scheduleNextReferenceAttempt, worker da feature 002). Ao sair de PENDING_REFERENCE, nextAttemptAt fica
+ * nulo e attempts é preservado (auditoria); correlationId nunca muda (I-53, I-67, I-69).
  */
 export class WagerTransaction {
   private constructor(
@@ -240,6 +241,7 @@ export class WagerTransaction {
     this._referenceTransactionId = referenceTransactionId;
     this._observedBalance = observedBalance;
     this._processedAt = structuredClone(at);
+    this._nextReferenceAttemptAt = undefined;
     this._updatedAt = structuredClone(at);
   }
 
@@ -260,6 +262,7 @@ export class WagerTransaction {
     this._status = WagerTransactionStatus.Rejected;
     this._failureCode = code;
     this._observedBalance = observedBalance;
+    this._nextReferenceAttemptAt = undefined;
     this._updatedAt = structuredClone(at);
   }
 
@@ -268,6 +271,18 @@ export class WagerTransaction {
     this.assertTransitionFrom([WagerTransactionStatus.Pending, WagerTransactionStatus.PendingReference], 'FAILED');
     this._status = WagerTransactionStatus.Failed;
     this._failureCode = code;
+    this._nextReferenceAttemptAt = undefined;
+    this._updatedAt = structuredClone(at);
+  }
+
+  /**
+   * PENDING_REFERENCE → PENDING_REFERENCE: nova tentativa agendada (I-11). Só incrementa attempts e define a próxima
+   * hora; o status, o saldo observado e a referência não mudam. Em qualquer outro status, erro de programação.
+   */
+  scheduleNextReferenceAttempt(nextAttemptAt: Date, at: Date): void {
+    this.assertTransitionFrom([WagerTransactionStatus.PendingReference], 'PENDING_REFERENCE (next attempt)');
+    this._referenceAttempts += 1;
+    this._nextReferenceAttemptAt = structuredClone(nextAttemptAt);
     this._updatedAt = structuredClone(at);
   }
 

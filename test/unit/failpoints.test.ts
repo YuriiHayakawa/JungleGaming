@@ -109,3 +109,59 @@ test('after_reversal_insert_before_commit no modo padrão lança FailpointError;
   const off = new EnvFailpoints({ failpoint: 'after_reversal_insert_before_commit:reversal_unique_violation_always', nodeEnv: 'production' });
   expect(() => off.hit('after_reversal_insert_before_commit')).not.toThrow();
 });
+
+// ---- feature 002 (T005; I-40, R-29)
+
+test.each(['after_commit_before_ack', 'before_publish_mark'] as const)(
+  '%s chama o exit injetado no modo padrão',
+  (name) => {
+    const { exit, calls } = exitSpy();
+    const fp = new EnvFailpoints({ failpoint: name, nodeEnv: 'test', exit });
+    fp.hit(name);
+    expect(calls).toEqual([1]);
+  },
+);
+
+test('after_pending_resolution_before_commit lança FailpointError no modo padrão', () => {
+  const { exit, calls } = exitSpy();
+  const fp = new EnvFailpoints({ failpoint: 'after_pending_resolution_before_commit', nodeEnv: 'test', exit });
+  expect(() => fp.hit('after_pending_resolution_before_commit')).toThrow(FailpointError);
+  expect(calls).toEqual([]);
+});
+
+test('modo invariant_violation: erro com code P0001, classificado como invariant', async () => {
+  const { classifyDbError } = await import('../../src/platform/persistence/pg-errors.ts');
+  const fp = new EnvFailpoints({ failpoint: 'after_pending_resolution_before_commit:invariant_violation', nodeEnv: 'test' });
+  let thrown: unknown;
+  try {
+    fp.hit('after_pending_resolution_before_commit');
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(Error);
+  expect((thrown as { code?: string }).code).toBe('P0001');
+  expect(classifyDbError(thrown)).toBe('invariant');
+  // em toda passagem
+  expect(() => fp.hit('after_pending_resolution_before_commit')).toThrow();
+});
+
+test('NODE_ENV=production desliga os três failpoints novos', () => {
+  const { exit, calls } = exitSpy();
+  for (const failpoint of [
+    'after_commit_before_ack',
+    'before_publish_mark',
+    'after_pending_resolution_before_commit',
+    'after_pending_resolution_before_commit:invariant_violation',
+  ]) {
+    const fp = new EnvFailpoints({ failpoint, nodeEnv: 'production', exit });
+    expect(() => fp.hit('after_commit_before_ack')).not.toThrow();
+    expect(() => fp.hit('before_publish_mark')).not.toThrow();
+    expect(() => fp.hit('after_pending_resolution_before_commit')).not.toThrow();
+  }
+  expect(calls).toEqual([]);
+});
+
+test('modo desconhecido para os failpoints novos recusa o boot', () => {
+  expect(() => new EnvFailpoints({ failpoint: 'after_commit_before_ack:explode', nodeEnv: 'test' })).toThrow();
+  expect(() => new EnvFailpoints({ failpoint: 'before_publish_mark_x', nodeEnv: 'test' })).toThrow();
+});

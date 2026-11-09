@@ -84,3 +84,12 @@ describe('desconhecido', () => {
     expect(classifyDbError(undefined)).toBe('unknown');
   });
 });
+
+describe('feature 002 (T013; I-28, R-22)', () => {
+  test('23505 em inbox_messages_pk → inbox-race', () => {
+    expect(classifyDbError(pgError('duplicate key', { code: '23505', constraint: 'inbox_messages_pk' }))).toBe('inbox-race');
+    expect(
+      classifyDbError(new UniqueConstraintViolationException(pgError('duplicate key', { code: '23505', constraint: 'inbox_messages_pk' }))),
+    ).toBe('inbox-race');
+  });
+});

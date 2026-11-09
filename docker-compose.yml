@@ -1,14 +1,22 @@
 name: junglegaming
 
+# Ambiente comum das apps. Cada app redefine `environment` inteiro (o merge do YAML é raso), então os valores
+# abaixo são repetidos nas apps por meio da âncora *app-env.
+x-app-env: &app-env
+  DATABASE_URL: postgresql://junglegaming:junglegaming@postgres:5432/junglegaming
+  NODE_ENV: production
+  SQS_ENDPOINT: http://sqs:4566
+
 x-app: &app
   build: .
   env_file: .env.example
-  environment:
-    DATABASE_URL: postgresql://junglegaming:junglegaming@postgres:5432/junglegaming
-    NODE_ENV: production
   depends_on:
     migrate:
       condition: service_completed_successfully
+    queue-init:
+      condition: service_completed_successfully
+  # Prazo do término gracioso: CONSUMER_SHUTDOWN_TIMEOUT_MS (10 s) + margem (5 s) cabem aqui (R-27, R-35).
+  stop_grace_period: 30s
 
 services:
   postgres:
@@ -26,6 +34,18 @@ services:
       timeout: 2s
       retries: 30
 
+  # Emulador SQS (I-43, spike S-12): o LocalStack 2026.10.2 exige token; o MiniStack sobe sem token e aplica
+  # deduplicação FIFO, redrive e bloqueio por grupo. A imagem não tem curl/wget/aws CLI: healthcheck em Python.
+  sqs:
+    image: ministackorg/ministack:1.5.32
+    ports:
+      - "4566:4566"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4566/_localstack/health')"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
   migrate:
     build: .
     env_file: .env.example
@@ -36,31 +56,72 @@ services:
       postgres:
         condition: service_healthy
 
+  # Criação idempotente das filas FIFO, da DLQ e do redrive (plan, "Deploy local"); rodar de novo não falha.
+  queue-init:
+    build: .
+    env_file: .env.example
+    environment:
+      SQS_ENDPOINT: http://sqs:4566
+      SQS_TRANSACTIONS_QUEUE: wager-transactions.fifo
+      SQS_TRANSACTIONS_DLQ: wager-transactions-dlq.fifo
+      SQS_EVENTS_QUEUE: wager-events.fifo
+    command: ["bun", "run", "queue:init"]
+    depends_on:
+      sqs:
+        condition: service_healthy
+
+  # Papéis por instância (R-27): app1 HTTP + consumidor.
   app1:
     <<: *app
     environment:
-      DATABASE_URL: postgresql://junglegaming:junglegaming@postgres:5432/junglegaming
-      NODE_ENV: production
+      <<: *app-env
       PORT: "3001"
+      CONSUMER_ENABLED: "true"
     ports:
       - "3001:3001"
 
+  # app2: HTTP + consumidor + publicador.
   app2:
     <<: *app
     profiles: ["cluster"]
     environment:
-      DATABASE_URL: postgresql://junglegaming:junglegaming@postgres:5432/junglegaming
-      NODE_ENV: production
+      <<: *app-env
       PORT: "3002"
+      CONSUMER_ENABLED: "true"
+      PUBLISHER_ENABLED: "true"
     ports:
       - "3002:3002"
 
+  # app3: HTTP + publicador + worker de PENDING_REFERENCE.
   app3:
     <<: *app
     profiles: ["cluster"]
     environment:
-      DATABASE_URL: postgresql://junglegaming:junglegaming@postgres:5432/junglegaming
-      NODE_ENV: production
+      <<: *app-env
       PORT: "3003"
+      PUBLISHER_ENABLED: "true"
+      PENDING_WORKER_ENABLED: "true"
     ports:
       - "3003:3003"
+
+  # Instâncias do harness de container (test/support/container-instance.ts, R-30): sinal real em Linux, com a app
+  # como PID 1 (app-test) e atrás do init do Docker (app-test-init). Sem portas publicadas e sem dependências: o
+  # harness sobe com `docker compose --profile test run -d --no-deps` e passa o banco do arquivo de teste por env.
+  app-test:
+    build: .
+    profiles: ["test"]
+    env_file: .env.example
+    environment:
+      <<: *app-env
+      PORT: "3000"
+    command: ["bun", "src/main.ts"]
+
+  app-test-init:
+    build: .
+    profiles: ["test"]
+    init: true
+    env_file: .env.example
+    environment:
+      <<: *app-env
+      PORT: "3000"
+    command: ["bun", "src/main.ts"]

@@ -5,15 +5,22 @@ import { Migration20261107000100 } from '../../../migrations/Migration2026110700
 import { Migration20261107000200 } from '../../../migrations/Migration20261107000200.ts';
 import { Migration20261107000300 } from '../../../migrations/Migration20261107000300.ts';
 import { Migration20261107000400 } from '../../../migrations/Migration20261107000400.ts';
+import { Migration20261108000100 } from '../../../migrations/Migration20261108000100.ts';
+import { Migration20261108000200 } from '../../../migrations/Migration20261108000200.ts';
 import { ENTITY_SCHEMAS } from './entity-schemas.ts';
 import { releaseClientsLostWhileCheckedOut } from './pg-pool-guard.ts';
 
-/** Migrations registradas explicitamente, sem descoberta por arquivo (data-model §2.6, spike S-08). */
+/**
+ * Migrations registradas explicitamente, sem descoberta por arquivo (data-model §2.6, spike S-08): as quatro da 001 e
+ * as duas da 002 (data-model da 002, §2.3).
+ */
 export const MIGRATIONS = [
   { name: 'Migration20261107000100', class: Migration20261107000100 },
   { name: 'Migration20261107000200', class: Migration20261107000200 },
   { name: 'Migration20261107000300', class: Migration20261107000300 },
   { name: 'Migration20261107000400', class: Migration20261107000400 },
+  { name: 'Migration20261108000100', class: Migration20261108000100 },
+  { name: 'Migration20261108000200', class: Migration20261108000200 },
 ];
 
 export interface OrmSettings {

@@ -7,17 +7,34 @@ export const FAILPOINTS = Symbol('FAILPOINTS');
  * - `after_reversal_insert_before_commit`: só quando uma reversão (REFUND/ROLLBACK) é aplicada, depois das escritas e
  *   antes do commit (T096);
  * - `after_commit_before_response`: depois do commit de um efeito novo, antes da resposta.
+ * Feature 002 (R-29):
+ * - `after_commit_before_ack`: consumidor, depois do commit e antes do DeleteMessage;
+ * - `before_publish_mark`: publicador, depois do SendMessage aceito e antes da marca de publicado;
+ * - `after_pending_resolution_before_commit`: worker de PENDING_REFERENCE, antes do commit da reavaliação.
  */
 export type FailpointName =
   | 'after_ledger_insert_before_commit'
   | 'after_reversal_insert_before_commit'
-  | 'after_commit_before_response';
+  | 'after_commit_before_response'
+  | 'after_commit_before_ack'
+  | 'before_publish_mark'
+  | 'after_pending_resolution_before_commit';
 
 const NAMES: readonly FailpointName[] = [
   'after_ledger_insert_before_commit',
   'after_reversal_insert_before_commit',
   'after_commit_before_response',
+  'after_commit_before_ack',
+  'before_publish_mark',
+  'after_pending_resolution_before_commit',
 ];
+
+/** Failpoints cujo modo padrão encerra o processo (queda real, não exceção). */
+const EXITING: ReadonlySet<FailpointName> = new Set<FailpointName>([
+  'after_commit_before_response',
+  'after_commit_before_ack',
+  'before_publish_mark',
+]);
 
 /**
  * Modo do failpoint, escrito como `FAILPOINT=<nome>[:<modo>]`:
@@ -27,17 +44,21 @@ const NAMES: readonly FailpointName[] = [
  * - `reversal_unique_violation_once`: na 1ª passagem lança um erro no formato da violação do índice
  *   `wager_tx_single_reversal_uq` (SQLSTATE 23505), que o use case repete uma vez (R-12, T096); depois não faz nada.
  * - `reversal_unique_violation_always`: o mesmo erro em toda passagem; prova que a 2ª violação vira 500.
+ * - `invariant_violation` (002, R-29): em toda passagem lança um erro com SQLSTATE P0001, que o classificador trata
+ *   como quebra de invariante; prova o FAILED do worker de PENDING_REFERENCE (FR-029) sem mock.
  */
 type FailpointMode =
   | 'default'
   | 'serialization_failure_once'
   | 'reversal_unique_violation_once'
-  | 'reversal_unique_violation_always';
+  | 'reversal_unique_violation_always'
+  | 'invariant_violation';
 const MODES: readonly FailpointMode[] = [
   'default',
   'serialization_failure_once',
   'reversal_unique_violation_once',
   'reversal_unique_violation_always',
+  'invariant_violation',
 ];
 
 export interface Failpoints {
@@ -73,6 +94,15 @@ export class ReversalUniqueViolationFailpointError extends Error {
   }
 }
 
+/** Erro de teste no formato de um erro do driver com SQLSTATE P0001 (guarda do banco): quebra de invariante. */
+export class InvariantViolationFailpointError extends Error {
+  readonly code = 'P0001';
+  constructor(readonly failpoint: FailpointName) {
+    super(`failpoint triggered: ${failpoint} (invariant violation, SQLSTATE P0001)`);
+    this.name = 'InvariantViolationFailpointError';
+  }
+}
+
 export class EnvFailpoints implements Failpoints {
   private readonly active: FailpointName | undefined;
   private readonly mode: FailpointMode;
@@ -102,8 +132,12 @@ export class EnvFailpoints implements Failpoints {
       this.triggerCount += 1;
       throw new ReversalUniqueViolationFailpointError(name);
     }
+    if (this.mode === 'invariant_violation') {
+      this.triggerCount += 1;
+      throw new InvariantViolationFailpointError(name);
+    }
     this.triggerCount += 1;
-    if (name === 'after_commit_before_response') {
+    if (EXITING.has(name)) {
       this.exit(1);
       return;
     }

@@ -63,7 +63,7 @@ export class JsonLogger implements LoggerService {
     const entry: Fields = { level, time: new Date().toISOString(), msg: stringify(message) };
     const context = currentRequestContext();
     if (context) {
-      for (const key of ['correlationId', 'walletId', 'providerId', 'transactionId'] as const) {
+      for (const key of ['correlationId', 'messageId', 'causationId', 'walletId', 'providerId', 'transactionId'] as const) {
         if (context[key] !== undefined) entry[key] = context[key];
       }
     }

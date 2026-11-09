@@ -4,6 +4,11 @@ import type { MikroORM } from '@mikro-orm/postgresql';
 import { APP_CONFIG, type AppConfig } from './platform/config/app-config.ts';
 import { LOGGER, type JsonLogger } from './platform/logging/json-logger.ts';
 import { EnvFailpoints, FAILPOINTS } from './platform/failpoints/failpoints.ts';
+import { InMemoryMetrics } from './platform/metrics/in-memory-metrics.ts';
+import { METRICS } from './platform/metrics/metrics.port.ts';
+import { CryptoRandomSource } from './platform/random/crypto-random-source.ts';
+import { RANDOM_SOURCE } from './platform/random/random-source.port.ts';
+import { WORKER_REGISTRY, WorkerRegistry } from './platform/workers/worker-registry.ts';
 import { GlobalExceptionFilter } from './platform/http/global-exception.filter.ts';
 import { NoopAuthGuard } from './platform/auth/noop-auth.guard.ts';
 import { NoopProviderIdentity, PROVIDER_IDENTITY } from './platform/auth/provider-identity.port.ts';
@@ -13,6 +18,7 @@ import { CLOCK } from './shared-kernel/domain/clock.port.ts';
 import { ID_GENERATOR } from './shared-kernel/domain/id-generator.port.ts';
 import { SystemClock } from './shared-kernel/infrastructure/system-clock.ts';
 import { UuidV7IdGenerator } from './shared-kernel/infrastructure/uuidv7-id-generator.ts';
+import { MessagingModule } from './messaging/messaging.module.ts';
 import { WageringModule } from './wagering/wagering.module.ts';
 import { WalletsModule } from './wallets/wallets.module.ts';
 
@@ -32,10 +38,15 @@ export class AppModule {
       { provide: LOGGER, useValue: options.logger },
       { provide: CLOCK, useClass: SystemClock },
       { provide: ID_GENERATOR, useClass: UuidV7IdGenerator },
+      // Porta de métricas em memória, uma por instância (FR-036, R-32); jitter pela porta RandomSource (R-25).
+      { provide: METRICS, useValue: new InMemoryMetrics() },
+      { provide: RANDOM_SOURCE, useClass: CryptoRandomSource },
       {
         provide: FAILPOINTS,
         useFactory: () => new EnvFailpoints({ failpoint: config.failpoint, nodeEnv: config.nodeEnv }),
       },
+      // Trabalhadores de fundo registrados para o término gracioso (R-28); drenados antes do fechamento do pool.
+      { provide: WORKER_REGISTRY, useValue: new WorkerRegistry() },
       ormProvider,
       OrmLifecycle,
       {
@@ -54,9 +65,21 @@ export class AppModule {
     return {
       module: AppModule,
       global: true,
-      imports: [WalletsModule, WageringModule],
+      imports: [WalletsModule, WageringModule, MessagingModule],
       providers,
-      exports: [APP_CONFIG, LOGGER, CLOCK, ID_GENERATOR, FAILPOINTS, ORM, UNIT_OF_WORK, PROVIDER_IDENTITY],
+      exports: [
+        APP_CONFIG,
+        LOGGER,
+        CLOCK,
+        ID_GENERATOR,
+        METRICS,
+        RANDOM_SOURCE,
+        WORKER_REGISTRY,
+        FAILPOINTS,
+        ORM,
+        UNIT_OF_WORK,
+        PROVIDER_IDENTITY,
+      ],
     };
   }
 }

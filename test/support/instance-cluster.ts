@@ -1,6 +1,8 @@
 // N processos da app via Bun.spawn, todos no mesmo banco, com cliente round-robin (spike S-10, research R-17).
 // No Windows o SIGTERM vira término forçado (saída 143); nenhum teste depende de encerramento gracioso.
+// Feature 002 (T033): papéis por env, desligados por padrão (R-27), env das filas do arquivo (R-31) e kill(SIGKILL).
 import { join } from 'node:path';
+import { roleEnv, type Roles } from './roles.ts';
 
 const ENTRY = join(import.meta.dir, '..', '..', 'src', 'main.ts');
 const READY_TIMEOUT_MS = 15_000;
@@ -14,6 +16,8 @@ export interface Instance {
   logs: string[];
   exited: Promise<number>;
   stop(): Promise<number | null>;
+  /** Queda abrupta (SIGKILL): nenhum hook roda (SC-006). */
+  kill(): Promise<number>;
 }
 
 export interface Cluster {
@@ -28,9 +32,21 @@ export async function startInstance(options: {
   databaseUrl: string;
   env?: Record<string, string>;
   entry?: string;
+  roles?: Roles;
+  /** Env das filas do arquivo (useTestQueues().env()). */
+  queues?: Record<string, string>;
 }): Promise<Instance> {
   const proc = Bun.spawn(['bun', options.entry ?? ENTRY], {
-    env: { ...process.env, NODE_ENV: 'test', FAILPOINT: '', ...options.env, DATABASE_URL: options.databaseUrl, PORT: '0' },
+    env: {
+      ...process.env,
+      NODE_ENV: 'test',
+      FAILPOINT: '',
+      ...roleEnv(options.roles),
+      ...options.queues,
+      ...options.env,
+      DATABASE_URL: options.databaseUrl,
+      PORT: '0',
+    },
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -87,6 +103,10 @@ export async function startInstance(options: {
     baseUrl: `http://127.0.0.1:${port}`,
     logs,
     exited: proc.exited,
+    async kill() {
+      if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL');
+      return proc.exited;
+    },
     async stop() {
       if (proc.exitCode !== null || proc.signalCode !== null) return proc.exitCode;
       proc.kill('SIGTERM');
@@ -104,10 +124,14 @@ export async function startCluster(options: {
   size?: number;
   databaseUrl: string;
   env?: Record<string, string>;
+  roles?: Roles;
+  queues?: Record<string, string>;
 }): Promise<Cluster> {
   const size = options.size ?? 3;
   const started = await Promise.allSettled(
-    Array.from({ length: size }, () => startInstance({ databaseUrl: options.databaseUrl, env: options.env })),
+    Array.from({ length: size }, () =>
+      startInstance({ databaseUrl: options.databaseUrl, env: options.env, roles: options.roles, queues: options.queues }),
+    ),
   );
   const instances = started.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
   const failure = started.find((r): r is PromiseRejectedResult => r.status === 'rejected');

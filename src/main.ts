@@ -5,6 +5,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.ts';
 import { loadConfig, type AppConfig } from './platform/config/app-config.ts';
 import { correlationMiddleware } from './platform/correlation/correlation.middleware.ts';
+import { installShutdownSignals } from './platform/lifecycle/signal-handler.ts';
 import { JsonLogger, requestLoggingMiddleware } from './platform/logging/json-logger.ts';
 import { ID_GENERATOR, type IdGenerator } from './shared-kernel/domain/id-generator.port.ts';
 
@@ -26,7 +27,8 @@ export async function bootstrap(config: AppConfig, options: BootstrapOptions = {
   // Antes de qualquer rota: correlationId (I-53) e uma linha de log por requisição (constitution VIII).
   app.use(correlationMiddleware(app.get<IdGenerator>(ID_GENERATOR)));
   app.use(requestLoggingMiddleware(logger));
-  app.enableShutdownHooks();
+  // Sem app.enableShutdownHooks(): o processo instala o próprio handler de sinal (R-35, abaixo); os testes em processo
+  // chamam app.close(), que dispara os mesmos onApplicationShutdown.
 
   // Hierarquia do I-51: o timeout HTTP é maior que espera de conexão + espera de lock (spike S-03).
   const server = app.getHttpServer() as Server;
@@ -53,7 +55,15 @@ if (import.meta.main) {
     process.exit(1);
   }
   try {
-    await bootstrap(config);
+    const { app, logger } = await bootstrap(config);
+    // Handler próprio de SIGTERM/SIGINT (spike S-12.8, R-35): app.close() → exit(0), também como PID 1 do container.
+    installShutdownSignals({
+      target: process,
+      close: () => app.close(),
+      exit: (code) => process.exit(code),
+      shutdownTimeoutMs: config.consumer.shutdownTimeoutMs,
+      log: (message, fields) => logger.info(message, { event: message, ...fields }),
+    });
   } catch (error) {
     process.stderr.write(
       `${JSON.stringify({ level: 'error', msg: 'boot.failed', error: error instanceof Error ? error.message : String(error) })}\n`,

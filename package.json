@@ -9,12 +9,14 @@
     "typecheck": "tsc --noEmit",
     "migrate:up": "bun scripts/migrate.ts up",
     "migrate:down": "bun scripts/migrate.ts down",
+    "queue:init": "bun scripts/queue-init.ts",
     "test:unit": "bun test test/unit",
     "test:integration": "bun test --preload ./test/support/db-setup.preload.ts test/integration",
     "test:concurrency": "bun test --preload ./test/support/db-setup.preload.ts test/concurrency",
     "test": "bun run test:unit && bun run test:integration && bun run test:concurrency"
   },
   "dependencies": {
+    "@aws-sdk/client-sqs": "3.1156.0",
     "@mikro-orm/core": "7.2.5",
     "@mikro-orm/migrations": "7.2.5",
     "@mikro-orm/postgresql": "7.2.5",

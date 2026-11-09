@@ -4,6 +4,9 @@ import type { IdGenerator } from '../../shared-kernel/domain/id-generator.port.t
 /** Contexto da requisição: lido pelo logger, pelo filtro e pelos use cases (I-53, constitution VIII). */
 export interface RequestContext {
   correlationId: string;
+  /** Na fila (feature 002): o `messageId` do envelope, que também é o correlationId e o causationId (I-69). */
+  messageId?: string;
+  causationId?: string;
   transactionId?: string;
   walletId?: string;
   providerId?: string;

@@ -1,4 +1,4 @@
-// T045 — migrations up → down → up, pela API e pelo script real (constitution V, data-model §2.6, spike S-08).
+// T045 (001) e T015 (002) — migrations up → down → up, pela API e pelo script real (constitution V, data-model §2.6, spike S-08).
 // Usa bancos próprios criados de template0 (sem as migrations do template).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { existsSync, readdirSync } from 'node:fs';
@@ -7,8 +7,10 @@ import { runMigrations } from '../../src/platform/persistence/run-migrations.ts'
 import { TestDb, adminExec, databaseUrl, uniqueDatabaseName } from '../support/db.ts';
 
 const ROOT = join(import.meta.dir, '..', '..');
-const TABLES = ['outbox_messages', 'wager_transactions', 'wallet_ledger_entries', 'wallets'];
+const TABLES = ['inbox_messages', 'outbox_messages', 'wager_transactions', 'wallet_ledger_entries', 'wallets'];
 const TRIGGERS = [
+  'inbox_no_truncate_trg',
+  'inbox_no_update_delete_trg',
   'ledger_before_insert_trg',
   'ledger_no_truncate_trg',
   'ledger_no_update_delete_trg',
@@ -24,12 +26,21 @@ const FUNCTIONS = [
   'jg_wallet_matches_ledger_tail',
   'jg_wallets_guard',
 ];
-const INDEXES = ['ledger_wallet_seq_idx', 'outbox_pending_idx', 'wager_tx_single_reversal_uq'];
+const INDEXES = [
+  'inbox_transaction_idx',
+  'ledger_wallet_seq_idx',
+  'outbox_pending_idx',
+  'wager_tx_pending_by_reference_idx',
+  'wager_tx_pending_due_idx',
+  'wager_tx_single_reversal_uq',
+];
 const MIGRATIONS = [
   'Migration20261107000100',
   'Migration20261107000200',
   'Migration20261107000300',
   'Migration20261107000400',
+  'Migration20261108000100',
+  'Migration20261108000200',
 ];
 
 let apiDb: string;
@@ -71,11 +82,13 @@ async function catalog(url: string) {
   }
 }
 
+const sorted = (names: string[]) => [...names].sort((a, b) => a.localeCompare(b));
+
 function expectFullSchema(c: Awaited<ReturnType<typeof catalog>>) {
-  expect(c.tables).toEqual(TABLES);
-  expect(c.triggers).toEqual(TRIGGERS);
-  expect(c.functions).toEqual(FUNCTIONS);
-  expect(c.indexes).toEqual(INDEXES);
+  expect(c.tables).toEqual(sorted(TABLES));
+  expect(c.triggers).toEqual(sorted(TRIGGERS));
+  expect(c.functions).toEqual(sorted(FUNCTIONS));
+  expect(c.indexes).toEqual(sorted(INDEXES));
 }
 
 function expectEmptySchema(c: Awaited<ReturnType<typeof catalog>>) {

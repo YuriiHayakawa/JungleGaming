@@ -8,6 +8,7 @@ export type DbErrorKind =
   | 'idempotency-race'
   | 'wallet-duplicate'
   | 'reversal-race'
+  | 'inbox-race'
   | 'invariant'
   | 'unknown';
 
@@ -20,6 +21,8 @@ const UNIQUE_KINDS: Record<string, DbErrorKind> = {
   wager_tx_provider_external_uq: 'idempotency-race',
   wallets_player_currency_uq: 'wallet-duplicate',
   wager_tx_single_reversal_uq: 'reversal-race',
+  // feature 002 (R-22): a mesma mensagem gravada por outra instância; quem chama relê a inbox e compara o hash.
+  inbox_messages_pk: 'inbox-race',
 };
 /** Único caso identificado por mensagem: o timeout de aquisição do pg.Pool não tem SQLSTATE (spike S-09). */
 const ACQUIRE_TIMEOUT_MESSAGE = 'timeout exceeded when trying to connect';

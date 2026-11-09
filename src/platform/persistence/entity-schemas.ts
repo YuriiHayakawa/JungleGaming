@@ -1,4 +1,5 @@
 import type { EntitySchema } from '@mikro-orm/postgresql';
+import { InboxMessageSchema } from '../../inbox/infrastructure/inbox-message.schema.ts';
 import { OutboxMessageSchema } from '../../outbox/infrastructure/outbox-message.schema.ts';
 import { WagerTransactionSchema } from '../../wagering/infrastructure/wager-transaction.schema.ts';
 import { LedgerEntrySchema } from '../../wallets/infrastructure/ledger-entry.schema.ts';
@@ -10,4 +11,5 @@ export const ENTITY_SCHEMAS: EntitySchema[] = [
   LedgerEntrySchema,
   WagerTransactionSchema,
   OutboxMessageSchema,
+  InboxMessageSchema,
 ] as unknown as EntitySchema[];

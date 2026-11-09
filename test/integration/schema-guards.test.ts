@@ -462,3 +462,88 @@ describe('triggers de wager_transactions', () => {
     await assertWalletMatchesLedger(database.db, walletId);
   });
 });
+
+// ---- feature 002 (T016; data-model §2.1; I-28, I-69)
+
+interface InboxColumns {
+  consumer_name: string;
+  message_id: string;
+  payload_hash: string;
+  transaction_id: string;
+  received_at: Date;
+  processed_at: Date;
+}
+
+async function insertInbox(q: Queryable, transactionId: string, overrides: Partial<InboxColumns> = {}) {
+  const now = new Date();
+  const columns: InboxColumns = {
+    consumer_name: 'wager-transactions-consumer',
+    message_id: `msg-${uuid()}`,
+    payload_hash: HASH,
+    transaction_id: transactionId,
+    received_at: now,
+    processed_at: now,
+    ...overrides,
+  };
+  const keys = Object.keys(columns);
+  await q.query(
+    `INSERT INTO inbox_messages (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`,
+    Object.values(columns),
+  );
+  return columns;
+}
+
+describe('inbox_messages (002)', () => {
+  test('inbox_messages_pk barra o mesmo (consumer_name, message_id); outro consumidor é aceito', async () => {
+    const { walletId, playerId } = await openWallet();
+    const txId = await insertTx(database.db, txColumns(walletId, playerId));
+    const row = await insertInbox(database.db, txId);
+    await expect(insertInbox(database.db, txId, { message_id: row.message_id })).rejects.toEqual(constraint('inbox_messages_pk'));
+    await expect(insertInbox(database.db, txId, { message_id: row.message_id, consumer_name: 'other-consumer' })).resolves.toBeDefined();
+    await assertWalletMatchesLedger(database.db, walletId);
+  });
+
+  test('inbox_message_id_ck recusa message_id fora de ^[A-Za-z0-9._:-]{1,128}$', async () => {
+    const { walletId, playerId } = await openWallet();
+    const txId = await insertTx(database.db, txColumns(walletId, playerId));
+    for (const messageId of ['', 'msg 1', 'msg/1', 'mensagém', 'x'.repeat(129)]) {
+      await expect(insertInbox(database.db, txId, { message_id: messageId })).rejects.toEqual(
+        expect.objectContaining({ code: expect.stringMatching(/^(23514|22001)$/) }),
+      );
+    }
+    await expect(insertInbox(database.db, txId, { message_id: 'msg 1' })).rejects.toEqual(constraint('inbox_message_id_ck'));
+    await expect(insertInbox(database.db, txId, { message_id: 'A.b_c:d-e' })).resolves.toBeDefined();
+    await assertWalletMatchesLedger(database.db, walletId);
+  });
+
+  test('inbox_payload_hash_ck, inbox_consumer_name_ck e inbox_processed_after_ck recusam valores inválidos', async () => {
+    const { walletId, playerId } = await openWallet();
+    const txId = await insertTx(database.db, txColumns(walletId, playerId));
+    await expect(insertInbox(database.db, txId, { payload_hash: 'A'.repeat(64) })).rejects.toEqual(constraint('inbox_payload_hash_ck'));
+    await expect(insertInbox(database.db, txId, { payload_hash: 'g'.repeat(64) })).rejects.toEqual(constraint('inbox_payload_hash_ck'));
+    await expect(insertInbox(database.db, txId, { consumer_name: '' })).rejects.toEqual(constraint('inbox_consumer_name_ck'));
+    const received = new Date();
+    await expect(
+      insertInbox(database.db, txId, { received_at: received, processed_at: new Date(received.getTime() - 1000) }),
+    ).rejects.toEqual(constraint('inbox_processed_after_ck'));
+    await assertWalletMatchesLedger(database.db, walletId);
+  });
+
+  test('a FK recusa transaction_id inexistente', async () => {
+    await expect(insertInbox(database.db, uuid())).rejects.toEqual(expect.objectContaining({ code: '23503' }));
+  });
+
+  test('UPDATE, DELETE e TRUNCATE em inbox_messages são recusados com P0001', async () => {
+    const { walletId, playerId } = await openWallet();
+    const txId = await insertTx(database.db, txColumns(walletId, playerId));
+    const row = await insertInbox(database.db, txId);
+    await expect(
+      database.db.query('UPDATE inbox_messages SET processed_at = processed_at WHERE message_id = ?', [row.message_id]),
+    ).rejects.toEqual(guard('inbox_messages_immutable'));
+    await expect(database.db.query('DELETE FROM inbox_messages WHERE message_id = ?', [row.message_id])).rejects.toEqual(guard('inbox_messages_immutable'));
+    await expect(database.db.query('TRUNCATE inbox_messages')).rejects.toEqual(guard('inbox_messages_immutable'));
+    const rows = await database.db.query('SELECT 1 FROM inbox_messages WHERE message_id = ?', [row.message_id]);
+    expect(rows).toHaveLength(1);
+    await assertWalletMatchesLedger(database.db, walletId);
+  });
+});
