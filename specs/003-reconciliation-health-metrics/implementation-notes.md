@@ -137,3 +137,38 @@ Diff revisado: `src/health/**` (readiness, checagens, controller, módulo), `app
 `signal-exit.test.ts` 4 pass (container, com e sem init). Suítes completas sobre a árvore do commit da US2:
 `bun run typecheck` ok; `bun run test:unit` 669 pass; `bun run test:integration` 252 pass em 170 s;
 `bun run test:concurrency` 24 pass em 76 s.
+
+## US3 — Métricas
+
+| # | Decisão | Motivo | Task |
+|---|---------|--------|------|
+| N3-26 | Exposição: famílias em ordem de nome e séries em ordem do texto dos rótulos (`le` sempre por último); histograma sem nenhuma observação aparece só com `# HELP`/`# TYPE` (sem amostras zeradas); contador sem rótulo (`lock_conflicts_total`, `reconciliation_divergences_total`) aparece com 0 antes do primeiro incremento; contador rotulado sem incremento não inventa série. | contracts/metrics.md ("família sem observação: HELP e TYPE; contadores sem rótulo com 0"). Inventar séries rotuladas zeradas exigiria a lista de valores de cada rótulo, que não existe para `errorCode`. | T030 |
+| N3-27 | Banco fora (ou prazo de 2 s esgotado) na coleta: os dois gauges da outbox somem por inteiro, inclusive `# HELP`/`# TYPE`; o aviso `metrics.outbox_lag_unavailable` leva só o nome da classe do erro. | FR-022 e contracts/metrics.md ("os dois gauges são omitidos"). Uma família declarada sem amostra seria lida como "sem pendentes" por algumas ferramentas. | T030, T031 |
+| N3-28 | O controller injeta o token `METRICS` tipado como `Pick<InMemoryMetrics, 'snapshot'>`: o `snapshot()` não faz parte da `MetricsPort` (que continua só com `increment`/`observe`). | A porta de escrita usada pelos casos de uso não muda; a leitura é detalhe do adaptador em memória, que é o provider de `METRICS` (002). | T032 |
+| N3-29 | A idade do pendente mais antigo é `clock.now() − min(occurred_at)` (porta `Clock`, relógio do serviço, como assumido na spec); negativa vira 0. | Spec, Assumptions. Diferença de relógio entre app e banco não entra, porque `occurred_at` é gravado com o `Clock` da app (001). | T031 |
+| N3-30 | T029: a app principal fala com o banco por um proxy TCP (para a coleta com o banco fora) e fica sem publicador; uma segunda app, com publicador, esvazia a outbox quando o teste pede os gauges em 0; uma terceira, sobre o banco sem guardas (E-4), provoca a divergência. Os histogramas expostos são comparados com o que a porta em memória registrou (`_count`, `_sum`, `+Inf` = `_count`), e todo contador exposto é comparado com o da instância. | US3 cenários 1 a 6 numa só app seria impossível: a mesma instância não pode ter o publicador desligado (para medir pendentes) e ligado (para esvaziar). | T029 |
+| N3-31 | Processo TDD: T028 e T029 vistos vermelhos (módulo inexistente; 0 pass e 10 fail). No primeiro verde, o typecheck e o unitário pegaram um erro meu: o heredoc do shell usado para escrever o renderer cortou as barras invertidas dos escapes; corrigido antes de qualquer commit. | Registro honesto. | T028–T030 |
+
+### Revisão da US3 contra o review-checklist.md (T033)
+
+Diff revisado: `src/platform/metrics/prometheus-text.ts`, `src/outbox/infrastructure/outbox-lag.reader.ts`,
+`src/metrics/**` (controller e módulo), `app.module.ts` (import do módulo), `prometheus-text.test.ts`,
+`metrics-endpoint.test.ts`.
+
+| Item | Resultado | Evidência |
+|------|-----------|-----------|
+| Dinheiro sem `number` | OK | Nenhum valor monetário passa pela exposição; os `number` são contagens, latências em ms, quantidade de pendentes e idade em segundos. |
+| Nenhuma escrita nova | OK | O `OutboxLagReader` só faz `SELECT count(*)::text, min(occurred_at) … WHERE published_at IS NULL` (índice parcial `outbox_pending_idx`); nenhum `INSERT`/`UPDATE`/`DELETE`/lock em `src/metrics/**` nem no reader (varredura). |
+| Triggers presentes | N/A | Sem migration. |
+| Sem mock em integração e concorrência | OK | T029 com PostgreSQL e MiniStack reais; banco fora por proxy TCP real; DLQ, duplicata, lock esgotado e divergência provocados de verdade. |
+| Sem relógio nem id no domínio | OK | A idade usa a porta `Clock`; o renderer é puro; nada de `new Date()`/`Date.now(` no diff. |
+| Erros no envelope único | N/A | `/metrics` não tem caminho de erro: banco fora → 200 sem os gauges. |
+| Métricas de baixa cardinalidade e sem dinheiro | OK | Rótulos só da lista fechada (imposta pela porta, E-2; o T029 confere toda amostra exposta: nenhum rótulo fora da lista, nenhum valor com formato de UUID ou de número, nem o `walletId` nem o `providerId` usados no teste); histogramas com memória constante (buckets + janela de 1 000); gauges da outbox lidos na coleta e omitidos com o banco fora. |
+| Endpoints sem autenticação | OK | `@Public()` no controller; T029 chama sem nenhum header. |
+| Reconciliação / divergência / health | N/A | — (o T029 só usa a reconciliação da US1 para provocar a divergência). |
+
+### Checkpoint da US3
+
+`prometheus-text.test.ts` 8 pass; `in-memory-metrics.test.ts` 14 pass; `metrics-endpoint.test.ts` 10 pass. Suítes completas sobre a árvore do commit da US3:
+`bun run typecheck` ok; `bun run test:unit` 677 pass; `bun run test:integration` 262 pass em 174 s;
+`bun run test:concurrency` 24 pass em 77 s.

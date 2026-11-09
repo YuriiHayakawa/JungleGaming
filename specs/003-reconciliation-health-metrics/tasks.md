@@ -232,12 +232,12 @@ nenhum rótulo com id ou valor.
 
 ### Testes da User Story 3 (escrever primeiro; devem falhar)
 
-- [ ] T028 [P] [US3] Escrever `test/unit/prometheus-text.test.ts` (R-42; FR-019, FR-020): `renderPrometheus(snapshot,
+- [X] T028 [P] [US3] Escrever `test/unit/prometheus-text.test.ts` (R-42; FR-019, FR-020): `renderPrometheus(snapshot,
   gauges)` produz `# HELP` e `# TYPE` por família; contadores com e sem rótulo (sem rótulo aparece com 0 antes do
   primeiro incremento); histograma com `_bucket{le=…}` cumulativo até `+Inf`, `_sum` e `_count`; gauges; ausência dos
   gauges da outbox quando não informados; escape de `\\`, `\"` e `\n` nos valores de rótulo; ordem estável por nome e
   rótulos; texto aceito pelo `parsePrometheus` do T004
-- [ ] T029 [P] [US3] Escrever `test/integration/metrics-endpoint.test.ts` (US3 cenários 1 a 6; FR-019 a FR-024; SC-007,
+- [X] T029 [P] [US3] Escrever `test/integration/metrics-endpoint.test.ts` (US3 cenários 1 a 6; FR-019 a FR-024; SC-007,
   SC-009; I-76), com PostgreSQL e MiniStack reais, lendo `GET /metrics` com `parsePrometheus`:
   - depois de BET aceita, BET rejeitada, pendente, replay pela idempotência, mensagem duplicada, retry por lock
     esgotado, mensagem malformada (DLQ): `transactions_total{status}`, `duplicates_total{source}`,
@@ -252,15 +252,15 @@ nenhum rótulo com id ou valor.
 
 ### Implementação da User Story 3
 
-- [ ] T030 [US3] Implementar `src/platform/metrics/prometheus-text.ts` com `renderPrometheus` puro (R-42; nomes, tipos,
+- [X] T030 [US3] Implementar `src/platform/metrics/prometheus-text.ts` com `renderPrometheus` puro (R-42; nomes, tipos,
   HELP e buckets de [contracts/metrics.md](contracts/metrics.md)). Faz o T028 passar
-- [ ] T031 [US3] Implementar `src/outbox/infrastructure/outbox-lag.reader.ts` (R-44; data-model §2.3): `SELECT count(*),
+- [X] T031 [US3] Implementar `src/outbox/infrastructure/outbox-lag.reader.ts` (R-44; data-model §2.3): `SELECT count(*),
   min(occurred_at) FROM outbox_messages WHERE published_at IS NULL`, prazo de 2 s, idade pela porta `Clock` em segundos
   (0 sem pendentes); falha → `undefined` e `logger.warn('metrics.outbox_lag_unavailable')`; somente leitura
-- [ ] T032 [US3] Implementar `src/metrics/interfaces/http/metrics.controller.ts` (`GET /metrics`, `@Public()`,
+- [X] T032 [US3] Implementar `src/metrics/interfaces/http/metrics.controller.ts` (`GET /metrics`, `@Public()`,
   `Content-Type` do formato 0.0.4, `snapshot()` do `METRICS` + `OutboxLagReader` + `renderPrometheus`) e
   `src/metrics/metrics.module.ts`, registrado em `src/app.module.ts`. Faz o T029 passar
-- [ ] T033 [US3] Revisar o diff da US3 contra o `review-checklist.md`, com atenção a "Métricas de baixa cardinalidade e
+- [X] T033 [US3] Revisar o diff da US3 contra o `review-checklist.md`, com atenção a "Métricas de baixa cardinalidade e
   sem dinheiro" e "Nenhuma escrita nova"; registrar item a item em `implementation-notes.md`
 
 **Checkpoint US3**: `bun test test/unit/prometheus-text.test.ts test/unit/in-memory-metrics.test.ts && bun test
