@@ -172,3 +172,66 @@ Diff revisado: `src/platform/metrics/prometheus-text.ts`, `src/outbox/infrastruc
 `prometheus-text.test.ts` 8 pass; `in-memory-metrics.test.ts` 14 pass; `metrics-endpoint.test.ts` 10 pass. Suítes completas sobre a árvore do commit da US3:
 `bun run typecheck` ok; `bun run test:unit` 677 pass; `bun run test:integration` 262 pass em 174 s;
 `bun run test:concurrency` 24 pass em 77 s.
+
+## Polish
+
+### T034 — guardrails estendidos
+
+`test/unit/conventions.test.ts` ganhou quatro regras, cada uma com autoteste (exemplos que passam e que falham), além da
+varredura de `src/**` e `test/**`:
+
+- (j) em `test/**`: `useBareTestDatabase` só em `test/integration/reconciliation-divergence.test.ts` e
+  `test/integration/metrics-endpoint.test.ts` (e na própria definição, em `test/support/test-database.ts`);
+- (k) em `src/**`: nenhuma chamada `.increment(`/`.observe(` com rótulo `walletId`, `providerId`, `transactionId`,
+  `messageId`, `eventId` ou outra chave terminada em `Id` (inclusive abreviada, `{ walletId }`, e entre aspas);
+- (l) em `src/reconciliation/**`, `src/health/**`, `src/metrics/**` e `src/outbox/infrastructure/outbox-lag.reader.ts`:
+  nenhum `FOR UPDATE`/`FOR SHARE` (e variantes `NO KEY UPDATE`/`KEY SHARE`), `INSERT INTO`, `UPDATE … SET` nem
+  `DELETE FROM` em código (comentários não contam);
+- (m) controllers de `src/reconciliation`, `src/health` e `src/metrics`: `@Public()` no grupo de decorators do
+  `@Controller` ou em todo método de rota.
+
+Resultado: 53 testes (39 + 4 varreduras + 10 autotestes), nenhuma violação no repositório. Mutação conferida no
+repositório real: tirar o `@Public()` do controller de métricas derruba (m); trocar o `SELECT 1` do ready por
+`SELECT 1 FROM wallets FOR UPDATE` derruba (l).
+
+### T035 — revisão final do diff da feature contra o review-checklist.md
+
+Diff revisado: `f25c52c..HEAD` (Fundação, US1, US2, US3) mais o T034; 25 arquivos de `src/` (1 024 linhas
+acrescentadas), nenhum de `migrations/`. Os itens já revisados por história (tabelas da Fundação, T019, T027 e T033)
+foram conferidos de novo sobre o código final, com as varreduras abaixo.
+
+| Item | Resultado | Evidência no código final |
+|------|-----------|---------------------------|
+| Dinheiro sem `number` | OK | Varredura das linhas acrescentadas em `src/`: nenhum `parseFloat(`, nenhum `Number(` em `amount`/`balance`, nenhum campo monetário tipado como `number` (guardrail (c) verde). Saldos e diferença só como `Money`; SQL com `::text`; respostas com strings de 2 casas. Métricas sem valores monetários (rótulos da lista fechada). |
+| Nenhuma escrita nova | OK | Nenhum `INSERT INTO`/`UPDATE … SET`/`DELETE FROM` acrescentado em `src/` (varredura do diff; o único `FOR UPDATE` é um comentário do reader); guardrail (l) verde; a reconciliação é `READ ONLY` imposta e conferida pelo banco (N3-13). |
+| Triggers presentes | OK | `git diff f25c52c..HEAD -- migrations` vazio. O banco sem guardas é um template próprio que nunca recebe a `Migration20261107000400` (E-4); nenhum `DISABLE TRIGGER`/`session_replication_role` em `test/**` (guardrail (a) verde); `schema-guards.test.ts` e `migrations.test.ts` verdes. |
+| Sem mock em integração e concorrência | OK | Varredura das linhas acrescentadas em `test/`: nenhum `mock(`, `spyOn`, `TRUNCATE`, `PurgeQueue`; guardrails (b), (f) e (i) verdes. Indisponibilidade só por proxies TCP reais (cortado e pendurado); SIGTERM real em container; os `UPDATE` de adulteração só existem nos dois testes sobre o banco sem guardas (guardrail (j)). |
+| Sem relógio nem id no domínio | OK | Nenhum `new Date()`, `Date.now(`, `randomUUID(`, `Math.random(` acrescentado em `src/` (guardrails (e) e (h) verdes); a idade da outbox usa a porta `Clock`; o prazo do ready usa temporizadores injetáveis. |
+| Erros no envelope único | OK | Reconciliação: 400, 404, 500 e 503 (com `Retry-After`) pelo filtro global, com o `retryable` da taxonomia (T012); health fora do envelope por definição, com corpo próprio (T021); `/metrics` sem caminho de erro (banco fora → 200 sem os gauges, T029). |
+| Reconciliação somente leitura num snapshot | OK | `REPEATABLE READ` + `SET TRANSACTION READ ONLY` + conferência do modo; saldo e agregado na mesma transação; sem lock; `sum` e `lag()` no banco, uma linha devolvida (T012: 1 000 lançamentos em ~4 ms; T014: 465 leituras consistentes durante 50 BETs; mutação `READ COMMITTED` derruba o T014). |
+| Divergência sinalizada e nunca corrigida | OK | 200 com `consistent` false; log `error` sem dinheiro; +1 no contador por detecção; nenhum caminho de escrita no módulo; dados idênticos depois (T013, T029). |
+| Divergência testada sem desligar guardas | OK | Só `useBareTestDatabase` (template próprio, E-4) e guardrail (j); a comparação também é testada como função pura (T011). |
+| Health correto | OK | live sem dependências; ready em paralelo, 2 s por checagem, 503 com o estado real, 503 do instante do sinal até a saída (E-1), drenagem antes do `app.close()`, corpo próprio, log em debug (T020 a T023, em processo e em container, com e sem init). |
+| Métricas de baixa cardinalidade e sem dinheiro | OK | Lista fechada imposta pela porta (erro só em `NODE_ENV=test`, descarte com aviso fora dele, E-2) e pelo guardrail (k); histogramas com memória constante; gauges da outbox lidos na coleta e omitidos com o banco fora (T005, T028, T029). |
+| Endpoints sem autenticação | OK | `@Public()` nos três controllers (guardrail (m)); T012, T021 e T029 chamam sem credencial. |
+
+Nenhum item reprovado; nenhuma task voltou para a origem.
+
+### T036 — suíte completa
+
+`docker compose up -d postgres sqs` e `bun run typecheck && bun run test` (2026-11-09): saída 0 em 247 s.
+
+| Suíte | Testes | Arquivos | Duração |
+|-------|--------|----------|---------|
+| typecheck | ok | — | — |
+| unit (inclui o T034) | 691 pass, 0 fail | 37 | 1,2 s |
+| integration | 262 pass, 0 fail | 43 | 173,3 s |
+| concurrency | 24 pass, 0 fail | 19 | 71,6 s |
+
+Em relação ao fim da 002 (597 / 219 / 23): +94 unitários, +43 de integração e +1 de concorrência (o
+`reconciliation-under-load`; o `graceful-sigterm` foi estendido, não duplicado).
+
+T037 (quickstart de ponta a ponta) e T038 (README/ARCHITECTURE) não fazem parte desta rodada, por decisão do usuário.
+Limitações a levar para o ARCHITECTURE.md (além das do research §4): N3-14 (soma de ledger adulterado acima do limite →
+500), N3-21 (chamada do SQS do ready continua em segundo plano depois do prazo), N3-22 (ready com o banco pendurado
+segura uma conexão do pool por consulta).

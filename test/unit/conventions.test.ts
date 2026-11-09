@@ -3,6 +3,7 @@
 // Cada regra é uma função pura (arquivo, código) → violações, exercitada contra o repositório real e contra trechos de
 // exemplo embutidos aqui (autoteste: um que passa e um que falha). Este arquivo fica fora da varredura, porque os
 // exemplos contêm de propósito os padrões proibidos.
+// Feature 002 (T084): regras (f) a (i). Feature 003 (T034): regras (j) a (m).
 import { describe, expect, test } from 'bun:test';
 import { Glob } from 'bun';
 import { posix } from 'node:path';
@@ -289,6 +290,103 @@ export const randomRule: Rule = (file, source) => {
 export const purgeQueueRule: Rule = (file, source) =>
   file.startsWith('test/') ? matchAll(file, stripComments(source), 'filas: PurgeQueue', /\bPurgeQueue(Command)?\b|\bpurgeQueue\s*\(/, source) : [];
 
+// ---- feature 003 (T034; R-38, R-41, R-43)
+
+/** Arquivos que podem usar o banco sem guardas (R-38): os testes que provocam divergência, e a definição do helper. */
+const BARE_DATABASE_ALLOWLIST = new Set([
+  'test/integration/reconciliation-divergence.test.ts',
+  'test/integration/metrics-endpoint.test.ts',
+  'test/support/test-database.ts',
+]);
+
+/** (j) test/**: `useBareTestDatabase` (banco sem as guardas) só nos testes de divergência da reconciliação e das métricas. */
+export const bareDatabaseRule: Rule = (file, source) => {
+  if (!file.startsWith('test/') || BARE_DATABASE_ALLOWLIST.has(file)) return [];
+  return matchAll(file, stripComments(source), 'bare db: useBareTestDatabase fora dos testes de divergência', /\buseBareTestDatabase\b/, source);
+};
+
+const FORBIDDEN_LABEL_KEYS = new Set(['walletId', 'providerId', 'transactionId', 'messageId', 'eventId']);
+const METRIC_CALL = /\.(increment|observe)\s*\(/g;
+
+/** Texto dos argumentos de uma chamada, do `(` em `open` até o `)` correspondente (sem contar parênteses em strings). */
+function callArguments(code: string, open: number): string {
+  let depth = 0;
+  for (let i = open; i < code.length; i++) {
+    const ch = code[i];
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch;
+      i += 1;
+      while (i < code.length && code[i] !== quote) i += code[i] === '\\' ? 2 : 1;
+      continue;
+    }
+    if (ch === '(') depth += 1;
+    if (ch === ')') {
+      depth -= 1;
+      if (depth === 0) return code.slice(open + 1, i);
+    }
+  }
+  return code.slice(open + 1);
+}
+
+/**
+ * (k) src/**: nenhuma chamada `increment(`/`observe(` com rótulo `walletId`, `providerId`, `transactionId`, `messageId`,
+ * `eventId` ou outra chave terminada em `Id` (FR-023; R-43). A porta já recusa em teste; aqui o código nem chega a tentar.
+ */
+export const metricLabelsRule: Rule = (file, source) => {
+  if (!file.startsWith('src/')) return [];
+  const code = stripComments(source);
+  const violations: Violation[] = [];
+  for (const m of code.matchAll(METRIC_CALL)) {
+    const open = m.index + m[0].length - 1;
+    const args = callArguments(code, open);
+    const keys = [...args.matchAll(/(?:[{,]\s*)(['"]?)([A-Za-z_$][\w$]*)\1\s*(?=[:,}])/g)].map((k) => k[2]!);
+    for (const key of keys) {
+      if (FORBIDDEN_LABEL_KEYS.has(key) || /Id$/.test(key)) {
+        violations.push({ file, line: lineAt(code, m.index), rule: `metrics: rótulo de alta cardinalidade (${key})`, text: lineText(source, m.index) });
+      }
+    }
+  }
+  return violations;
+};
+
+const READ_ONLY_FILE = /^src\/(reconciliation|health|metrics)\/|^src\/outbox\/infrastructure\/outbox-lag\.reader\.ts$/;
+const WRITE_SQL = /\bFOR\s+(UPDATE|SHARE|NO\s+KEY\s+UPDATE|KEY\s+SHARE)\b|\bINSERT\s+INTO\b|\bUPDATE\s+[a-z_"][\w"]*\s+SET\b|\bDELETE\s+FROM\b/i;
+
+/**
+ * (l) src/reconciliation/**, src/health/**, src/metrics/** e o OutboxLagReader: nenhum `FOR UPDATE`/`FOR SHARE`,
+ * `INSERT`, `UPDATE` ou `DELETE` em SQL (nenhuma escrita nova e nenhum lock; constitution III e IV; FR-010).
+ */
+export const readOnlySqlRule: Rule = (file, source) =>
+  READ_ONLY_FILE.test(file) ? matchAll(file, stripComments(source), 'read-only: escrita ou lock em SQL', WRITE_SQL, source) : [];
+
+const OPERATIONAL_CONTROLLER = /^src\/(reconciliation|health|metrics)\/.*\.controller\.ts$/;
+const ROUTE_METHOD_DECORATOR = /@(Get|Post|Put|Patch|Delete|All|Options|Head)\s*\(/g;
+
+/** Linhas de decorators contíguas (começam com `@`) em torno do índice: o grupo de decorators de uma classe ou método. */
+function decoratorGroup(code: string, index: number): string {
+  const lines = code.split('\n');
+  let at = lineAt(code, index) - 1;
+  let start = at;
+  while (start > 0 && lines[start - 1]!.trim().startsWith('@')) start -= 1;
+  while (at + 1 < lines.length && lines[at + 1]!.trim().startsWith('@')) at += 1;
+  return lines.slice(start, at + 1).join('\n');
+}
+
+/**
+ * (m) Controllers de src/reconciliation, src/health e src/metrics: `@Public()` no controller (no grupo do `@Controller`)
+ * ou em toda rota (R-41; FR-018, FR-019; SC-009).
+ */
+export const publicControllersRule: Rule = (file, source) => {
+  if (!OPERATIONAL_CONTROLLER.test(file)) return [];
+  const code = stripComments(source);
+  const controller = /@Controller\s*\(/.exec(code);
+  if (!controller) return [{ file, line: 1, rule: 'public: controller sem @Controller', text: '' }];
+  if (/@Public\s*\(\s*\)/.test(decoratorGroup(code, controller.index))) return [];
+  return [...code.matchAll(ROUTE_METHOD_DECORATOR)]
+    .filter((m) => !/@Public\s*\(\s*\)/.test(decoratorGroup(code, m.index)))
+    .map((m) => ({ file, line: lineAt(code, m.index), rule: 'public: rota operacional sem @Public()', text: lineText(source, m.index) }));
+};
+
 const RULES: Array<[string, Rule]> = [
   ['(a) limpeza de dados em test/**', cleanupRule],
   ['(a) desligar guardas em test/**', disableGuardsRule],
@@ -300,6 +398,10 @@ const RULES: Array<[string, Rule]> = [
   ['(g) @aws-sdk só em src/messaging/infrastructure', awsSdkImportsRule],
   ['(h) sem Math.random em domain e application', randomRule],
   ['(i) sem PurgeQueue em test/**', purgeQueueRule],
+  ['(j) banco sem guardas só nos testes de divergência', bareDatabaseRule],
+  ['(k) rótulos de métrica sem ids em src/**', metricLabelsRule],
+  ['(l) somente leitura em reconciliação, health, métricas e OutboxLagReader', readOnlySqlRule],
+  ['(m) controllers operacionais com @Public()', publicControllersRule],
 ];
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -542,5 +644,72 @@ describe('autoteste: (i) sem PurgeQueue em test/**', () => {
   test('passa com filas próprias apagadas no fim e em comentários', () => {
     passes(purgeQueueRule, 'test/support/test-queues.ts', '// nenhum PurgeQueue como limpeza\nawait client.send(new DeleteQueueCommand({ QueueUrl: url }));');
     passes(purgeQueueRule, 'src/x.ts', 'const s = "PurgeQueue";');
+  });
+});
+
+describe('autoteste: (j) banco sem guardas só nos testes de divergência', () => {
+  test('passa nos dois testes permitidos e na definição do helper', () => {
+    const source = "import { useBareTestDatabase } from '../support/test-database.ts';\nconst bare = useBareTestDatabase('x');";
+    passes(bareDatabaseRule, 'test/integration/reconciliation-divergence.test.ts', source);
+    passes(bareDatabaseRule, 'test/integration/metrics-endpoint.test.ts', source);
+    passes(bareDatabaseRule, 'test/support/test-database.ts', 'export function useBareTestDatabase(tag: string) {}');
+  });
+  test('falha em qualquer outro arquivo de teste', () => {
+    fails(bareDatabaseRule, 'test/integration/reconciliation.test.ts', "const db = useBareTestDatabase('recon');");
+    fails(bareDatabaseRule, 'test/concurrency/x.test.ts', "import { useBareTestDatabase } from '../support/test-database.ts';");
+  });
+  test('comentários e src ficam fora', () => {
+    passes(bareDatabaseRule, 'test/integration/other.test.ts', '// nunca useBareTestDatabase aqui\nconst ok = 1;');
+    passes(bareDatabaseRule, 'src/x.ts', 'const useBareTestDatabase = 1;');
+  });
+});
+
+describe('autoteste: (k) rótulos de métrica de baixa cardinalidade', () => {
+  test('falha com walletId, providerId, transactionId, messageId, eventId ou chave terminada em Id', () => {
+    fails(metricLabelsRule, 'src/x.ts', "this.metrics.increment('transactions_total', { status, walletId: wallet.id });");
+    fails(metricLabelsRule, 'src/x.ts', "metrics.increment('duplicates_total', { providerId });");
+    fails(metricLabelsRule, 'src/x.ts', "metrics.observe('processing_latency_ms', ms, {\n  worker: 'consumer',\n  messageId: envelope.messageId,\n});");
+    fails(metricLabelsRule, 'src/x.ts', "metrics.increment('dlq_total', { 'eventId': id });");
+    fails(metricLabelsRule, 'src/x.ts', "metrics.increment('retries_total', { roundId: r });");
+    fails(metricLabelsRule, 'src/x.ts', "metrics.increment('transactions_total', { transactionId });");
+  });
+  test('passa com os rótulos da lista fechada, sem rótulo e com ids fora da chamada', () => {
+    passes(metricLabelsRule, 'src/x.ts', "this.deps.metrics.increment('dlq_total', { errorCode: action.errorCode, errorClass: action.errorClass });");
+    passes(metricLabelsRule, 'src/x.ts', "metrics.increment('lock_conflicts_total');");
+    passes(metricLabelsRule, 'src/x.ts', "metrics.observe('processing_latency_ms', elapsed(walletId), { worker: 'pending_worker' });");
+    passes(metricLabelsRule, 'src/x.ts', "logger.info('x', { walletId });\nmetrics.increment('transactions_total', { status });");
+    passes(metricLabelsRule, 'test/x.ts', "metrics.increment('transactions_total', { walletId: 'w' });");
+  });
+});
+
+describe('autoteste: (l) somente leitura em reconciliação, health, métricas e OutboxLagReader', () => {
+  test('falha com lock ou escrita em SQL', () => {
+    fails(readOnlySqlRule, 'src/reconciliation/infrastructure/x.ts', "await em.execute('SELECT balance FROM wallets WHERE id = ? FOR UPDATE', [id]);");
+    fails(readOnlySqlRule, 'src/reconciliation/infrastructure/x.ts', "await em.execute('SELECT 1 FROM wallets FOR SHARE');");
+    fails(readOnlySqlRule, 'src/health/infrastructure/x.ts', "await em.execute('INSERT INTO wallets (id) VALUES (?)', [id]);");
+    fails(readOnlySqlRule, 'src/metrics/x.ts', "await em.execute('update wallets set balance = ? where id = ?', [b, id]);");
+    fails(readOnlySqlRule, 'src/outbox/infrastructure/outbox-lag.reader.ts', "await em.execute('DELETE FROM outbox_messages');");
+  });
+  test('passa com leituras, comentários e fora dos módulos de leitura', () => {
+    passes(readOnlySqlRule, 'src/reconciliation/infrastructure/x.ts', "// sem FOR UPDATE\nawait em.execute('SELECT balance::text FROM wallets WHERE id = ?', [id]);");
+    passes(readOnlySqlRule, 'src/reconciliation/infrastructure/x.ts', "await em.execute('SET TRANSACTION READ ONLY');");
+    passes(readOnlySqlRule, 'src/outbox/infrastructure/mikro-orm-outbox.repository.ts', "await em.execute('UPDATE outbox_messages SET published_at = ? WHERE id = ?');");
+  });
+});
+
+describe('autoteste: (m) controllers operacionais com @Public()', () => {
+  const file = 'src/health/interfaces/http/health.controller.ts';
+  test('passa com @Public() no controller ou em toda rota', () => {
+    passes(publicControllersRule, file, "@Public()\n@Controller('health')\nexport class H {\n  @Get('live')\n  live() {}\n}");
+    passes(publicControllersRule, file, "@Controller('health')\n@Public()\nexport class H {\n  @Get('live')\n  live() {}\n}");
+    passes(publicControllersRule, file, "@Controller('wallets')\nexport class R {\n  @Public()\n  @Post(':id/reconciliation')\n  @HttpCode(200)\n  r() {}\n}");
+  });
+  test('falha sem @Public() ou com rota sem ele', () => {
+    fails(publicControllersRule, file, "@Controller('health')\nexport class H {\n  @Get('live')\n  live() {}\n}");
+    fails(publicControllersRule, file, "@Controller('health')\nexport class H {\n  @Public()\n  @Get('live')\n  live() {}\n\n  @Get('ready')\n  ready() {}\n}");
+    fails(publicControllersRule, file, "// @Public()\n@Controller('health')\nexport class H {\n  @Get('live')\n  live() {}\n}");
+  });
+  test('arquivos que não são controllers operacionais ficam fora', () => {
+    passes(publicControllersRule, 'src/wallets/interfaces/http/wallets.controller.ts', "@Controller('wallets')\nexport class W {\n  @Get(':id')\n  get() {}\n}");
   });
 });

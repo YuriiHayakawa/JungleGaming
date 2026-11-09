@@ -275,16 +275,16 @@ nenhum rótulo com id ou valor.
 > **Adiado (como na 001 e na 002):** `README.md` e `ARCHITECTURE.md` ficam para o fim do projeto; o conteúdo desta feature
 > está no plan e nas limitações do research §4.
 
-- [ ] T034 [P] Estender `test/unit/conventions.test.ts` (T118 da 001, T084 da 002; R-38, R-41, R-43), cada regra com
+- [X] T034 [P] Estender `test/unit/conventions.test.ts` (T118 da 001, T084 da 002; R-38, R-41, R-43), cada regra com
   autoteste (um exemplo que passa e um que falha): (j) `useBareTestDatabase` só importado por
   `test/integration/reconciliation-divergence.test.ts` e `test/integration/metrics-endpoint.test.ts`; (k) em `src/**`,
   nenhuma chamada `increment(`/`observe(` com rótulo `walletId`, `providerId`, `transactionId`, `messageId`, `eventId`
   ou outra chave terminada em `Id`; (l) em `src/reconciliation/**`, `src/health/**` e `src/metrics/**`, nenhum
   `FOR UPDATE`, `FOR SHARE`, `INSERT`, `UPDATE` ou `DELETE` em SQL; (m) os controllers de `src/reconciliation`,
   `src/health` e `src/metrics` têm `@Public()`
-- [ ] T035 Revisar o diff completo da feature contra o `review-checklist.md` (gate de Revisão); registrar item a item em
+- [X] T035 Revisar o diff completo da feature contra o `review-checklist.md` (gate de Revisão); registrar item a item em
   `implementation-notes.md`; item reprovado volta para a task de origem antes do T036
-- [ ] T036 Executar a suíte completa pelos scripts do `package.json`, com `docker compose up -d postgres sqs`:
+- [X] T036 Executar a suíte completa pelos scripts do `package.json`, com `docker compose up -d postgres sqs`:
   `bun run typecheck && bun run test` (unit, integration e concurrency), tudo verde, inclusive o T034; registrar a
   contagem de testes e a duração
 - [ ] T037 Validar o `quickstart.md` de ponta a ponta com `docker compose --profile cluster up -d --build` (cenários §3.1
