@@ -1,6 +1,8 @@
 import type { EntityManager, MikroORM } from '@mikro-orm/postgresql';
 import { OutboxMessage } from '../../outbox/domain/outbox-message.ts';
 import type { MikroOrmOutboxWriter } from '../../outbox/infrastructure/mikro-orm-outbox.writer.ts';
+import { InboxMessage, InboxPayloadMismatchError } from '../../inbox/domain/inbox-message.ts';
+import type { MikroOrmInboxRepository } from '../../inbox/infrastructure/mikro-orm-inbox.repository.ts';
 import { currentRequestContext, setRequestContextValues } from '../../platform/correlation/request-context.ts';
 import type { Failpoints } from '../../platform/failpoints/failpoints.ts';
 import { classifyDbError } from '../../platform/persistence/pg-errors.ts';
@@ -47,9 +49,32 @@ export interface SubmitWagerTransactionInput {
   referenceExternalTransactionId?: string | undefined;
 }
 
+/** Linha de inbox anexada a uma submissão vinda da fila (feature 002, I-28; R-22). */
+export interface InboxReference {
+  consumerName: string;
+  messageId: string;
+}
+
 export interface SubmitWagerTransactionCommand {
   idempotencyKey: string;
   input: SubmitWagerTransactionInput;
+  /** Canal de entrada (R-22). Padrão `http`; o HTTP não muda de comportamento. */
+  origin?: 'http' | 'queue';
+  /** Só na fila: a inbox é gravada na mesma transação do efeito ou do replay (FR-003, I-28). */
+  inbox?: InboxReference;
+  /** Só na fila: o `messageId`, levado aos eventos registrados (I-69). */
+  causationId?: string;
+}
+
+/**
+ * Resultado da submissão com o que aconteceu no banco (feature 002):
+ * - `new`: efeito novo confirmado (transação, saldo, ledger, outbox e, na fila, inbox no mesmo commit);
+ * - `replay`: transação já existente pela idempotência; na fila, a linha de inbox foi gravada apontando para ela;
+ * - `duplicate`: só na fila, a mesma mensagem já estava na inbox com o mesmo hash; nada foi gravado.
+ */
+export interface SubmissionOutcome {
+  result: TransactionResult;
+  effect: 'new' | 'replay' | 'duplicate';
 }
 
 /** Dados fixos de uma requisição aceita, iguais em todas as tentativas da unit of work. */
@@ -63,6 +88,8 @@ interface AcceptedRequest {
 /** Onde a duplicata foi reconhecida (R-08): caminho rápido, releitura sob o lock ou releitura depois do 23505. */
 type IdempotencySource = 'fast-path' | 'under-lock' | 'after-unique-violation';
 
+type UnderLockOutcome = { result: TransactionResult; effect: SubmissionOutcome['effect'] };
+
 /** Log estruturado mínimo (o JsonLogger da plataforma); nunca recebe valores monetários (FR-058). */
 export interface UseCaseLogger {
   info(message: string, fields?: Record<string, unknown>): void;
@@ -75,6 +102,7 @@ export interface SubmitWagerTransactionDeps {
   transactions: MikroOrmWagerTransactionRepository;
   ledger: MikroOrmLedgerRepository;
   outbox: MikroOrmOutboxWriter;
+  inbox: MikroOrmInboxRepository;
   failpoints: Failpoints;
   clock: Clock;
   ids: IdGenerator;
@@ -102,7 +130,16 @@ export class SubmitWagerTransactionUseCase {
 
   constructor(private readonly deps: SubmitWagerTransactionDeps) {}
 
+  /** Entrada HTTP (e qualquer chamador que só precise do resultado). */
   async execute(command: SubmitWagerTransactionCommand): Promise<TransactionResult> {
+    return (await this.submit(command)).result;
+  }
+
+  /**
+   * Submissão com o detalhe do que foi gravado (feature 002, R-22). Na fila (`inbox` presente), a linha de inbox entra
+   * no mesmo commit do efeito ou do replay; conflito de idempotência e wallet inexistente não gravam inbox (I-68).
+   */
+  async submit(command: SubmitWagerTransactionCommand): Promise<SubmissionOutcome> {
     const { input } = command;
     const request: AcceptedRequest = {
       command,
@@ -112,23 +149,29 @@ export class SubmitWagerTransactionUseCase {
     };
 
     // I-44 passo 3: caminho rápido num fork próprio, sem lock. O replay não disputa o lock da wallet nem depende
-    // da checagem de wallet do passo 4.
+    // da checagem de wallet do passo 4. Na fila, o replay grava a inbox numa transação mínima (R-22 passo 1).
     const known = await this.resolveExisting(this.deps.orm.em.fork(), request, 'fast-path');
-    if (known) return known;
+    if (known) return this.replayOutsideLock(request, known);
 
     // I-44 passo 4 (I-20): wallet inexistente → 404 sem registrar nada. Leitura num fork próprio, que termina antes
     // de a transação começar (R-19).
     const existing = await this.deps.wallets.findById(this.deps.orm.em.fork(), input.walletId);
     if (!existing) throw new WalletNotFoundError();
 
-    let outcome: { result: TransactionResult; replay: boolean };
+    let outcome: UnderLockOutcome;
     try {
       outcome = await this.runRetryingReversalRace(request);
     } catch (error) {
-      if (classifyDbError(error) !== 'idempotency-race') throw error;
+      const kind = classifyDbError(error);
+      if (kind === 'inbox-race') {
+        // Outra instância gravou a mesma mensagem (outra wallet, por hash diferente, ou a mesma, se o lock não a
+        // serializou): esta transação sofreu rollback; relê a inbox fora dela (R-22).
+        return this.resolveInboxRace(request, error);
+      }
+      if (kind !== 'idempotency-race') throw error;
       // R-08 passo 3: a transação desta requisição já sofreu rollback; relê fora dela, num fork novo.
       const resolved = await this.resolveExisting(this.deps.orm.em.fork(), request, 'after-unique-violation');
-      if (resolved) return resolved;
+      if (resolved) return this.replayOutsideLock(request, resolved);
       throw new InternalError({ cause: error });
     }
 
@@ -137,9 +180,67 @@ export class SubmitWagerTransactionUseCase {
     // linha existente, já gravado por `resolveExisting`.
     setRequestContextValues({ transactionId: outcome.result.transactionId });
 
-    // Depois do commit de um efeito novo e antes da resposta (testes de queda, R-16); no-op em produção (I-40).
-    if (!outcome.replay) this.deps.failpoints.hit('after_commit_before_response');
-    return outcome.result;
+    // Depois do commit de um efeito novo e antes da resposta (testes de queda, R-16); no-op em produção (I-40). Na
+    // fila, o ponto equivalente é `after_commit_before_ack`, no consumidor (R-29).
+    if (outcome.effect === 'new' && this.originOf(request) === 'http') this.deps.failpoints.hit('after_commit_before_response');
+    return outcome;
+  }
+
+  private originOf(request: AcceptedRequest): 'http' | 'queue' {
+    return request.command.origin ?? 'http';
+  }
+
+  /**
+   * Replay reconhecido fora do lock da wallet (caminho rápido ou depois do 23505 de idempotência). No HTTP, só devolve
+   * o resultado gravado. Na fila, grava a linha de inbox apontando a transação existente numa transação mínima, sem
+   * lock de wallet (inbox é linha própria, sem ciclo de lock; plan, "Ordem única de lock"). `23505` em
+   * `inbox_messages_pk` → outra entrega da mesma mensagem gravou antes: relê e compara o hash (R-22).
+   */
+  private async replayOutsideLock(request: AcceptedRequest, result: TransactionResult): Promise<SubmissionOutcome> {
+    const { inbox } = request.command;
+    if (!inbox) return { result, effect: 'replay' };
+    try {
+      await this.deps.unitOfWork.run((em) => this.insertInbox(em, request, result.transactionId));
+    } catch (error) {
+      if (classifyDbError(error) !== 'inbox-race') throw error;
+      return this.resolveInboxRace(request, error);
+    }
+    return { result, effect: 'replay' };
+  }
+
+  /** Depois de um 23505 em `inbox_messages_pk`: mesmo hash = duplicata já gravada; hash diferente = venenosa (I-28). */
+  private async resolveInboxRace(request: AcceptedRequest, cause: unknown): Promise<SubmissionOutcome> {
+    const { inbox } = request.command;
+    if (!inbox) throw new InternalError({ cause });
+    const em = this.deps.orm.em.fork();
+    const stored = await this.deps.inbox.findByConsumerAndMessageId(em, inbox.consumerName, inbox.messageId);
+    if (!stored) throw new InternalError({ cause });
+    return this.duplicateOf(em, request, stored);
+  }
+
+  /** A mensagem já está na inbox: mesmo hash → resultado gravado da transação dela, sem efeito; senão, venenosa. */
+  private async duplicateOf(em: EntityManager, request: AcceptedRequest, stored: InboxMessage): Promise<SubmissionOutcome> {
+    if (!stored.matchesPayload(request.payloadHash)) throw new InboxPayloadMismatchError(stored.messageId);
+    const transaction = await this.deps.transactions.findById(em, stored.transactionId);
+    if (!transaction) throw new InternalError();
+    setRequestContextValues({ transactionId: transaction.id });
+    this.deps.logger.info('wager.inbox', { outcome: 'duplicate', transactionId: transaction.id });
+    return { result: toTransactionResult(transaction, { replay: true }), effect: 'duplicate' };
+  }
+
+  /** Grava a linha de inbox já processada com o EM recebido (o da transação do efeito ou do replay). */
+  private async insertInbox(em: EntityManager, request: AcceptedRequest, transactionId: string): Promise<void> {
+    const { inbox } = request.command;
+    if (!inbox) return;
+    const message = InboxMessage.receive({
+      messageId: inbox.messageId,
+      consumerName: inbox.consumerName,
+      payloadHash: request.payloadHash,
+      transactionId,
+      receivedAt: request.receivedAt,
+    });
+    message.markProcessed(this.deps.clock.now());
+    await this.deps.inbox.insert(em, message);
   }
 
   /**
@@ -151,7 +252,7 @@ export class SubmitWagerTransactionUseCase {
    * use case **uma** vez, do zero, e sob o lock a nova execução vê a reversão confirmada e responde ALREADY_REVERSED.
    * Uma segunda violação é quebra de invariante → InternalError (500), sem efeito.
    */
-  private async runRetryingReversalRace(request: AcceptedRequest): Promise<{ result: TransactionResult; replay: boolean }> {
+  private async runRetryingReversalRace(request: AcceptedRequest): Promise<UnderLockOutcome> {
     for (let attempt = 0; ; attempt++) {
       try {
         return await this.deps.unitOfWork.run((em) => this.applyUnderLock(em, request));
@@ -171,16 +272,25 @@ export class SubmitWagerTransactionUseCase {
    * idempotência sob o lock, carrega a referência, decide e grava na ordem do data-model §3: transação já no status
    * final → saldo com asserção de versão → lançamento → outbox.
    */
-  private async applyUnderLock(
-    em: EntityManager,
-    request: AcceptedRequest,
-  ): Promise<{ result: TransactionResult; replay: boolean }> {
+  private async applyUnderLock(em: EntityManager, request: AcceptedRequest): Promise<UnderLockOutcome> {
     const wallet = await this.deps.wallets.lockById(em, request.command.input.walletId);
     if (!wallet) throw new WalletNotFoundError();
 
+    // Fila (R-22 passo 2, data-model §3.1 passo 3): sob o lock, relê a inbox antes da idempotência. Uma entrega da
+    // mesma mensagem confirmada antes (inclusive por outra instância) vira duplicata sem escrever nada.
+    const { inbox } = request.command;
+    if (inbox) {
+      const stored = await this.deps.inbox.findByConsumerAndMessageId(em, inbox.consumerName, inbox.messageId);
+      if (stored) return this.duplicateOf(em, request, stored);
+    }
+
     // R-08 passo 2: em READ COMMITTED, depois do lock esta leitura enxerga tudo o que foi confirmado antes dela.
+    // Na fila, o replay grava a inbox nesta mesma transação (data-model §3.1 passo 4).
     const known = await this.resolveExisting(em, request, 'under-lock');
-    if (known) return { result: known, replay: true };
+    if (known) {
+      await this.insertInbox(em, request, known.transactionId);
+      return { result: known, effect: 'replay' };
+    }
 
     const transaction = this.newTransaction(request);
     // data-model §3 passo 4: referência carregada sob o lock, com o EM da transação (R-19).
@@ -190,9 +300,12 @@ export class SubmitWagerTransactionUseCase {
     const now = this.deps.clock.now();
     const events = await this.record(em, decision, wallet, transaction, reference, {
       correlationId: request.correlationId,
+      causationId: request.command.causationId,
       now,
     });
 
+    // Fila: inbox depois da transação (FK) e antes da outbox, no mesmo commit (data-model §3.1 passo 8, FR-003).
+    await this.insertInbox(em, request, transaction.id);
     await this.deps.outbox.append(em, events.map((event) => OutboxMessage.enqueue(event)));
     // Depois do lançamento e antes do commit: prova a atomicidade (SC-007) e as repetições (R-12, T096); no-op em
     // produção (I-40).
@@ -200,7 +313,7 @@ export class SubmitWagerTransactionUseCase {
       this.deps.failpoints.hit('after_reversal_insert_before_commit');
     }
     this.deps.failpoints.hit('after_ledger_insert_before_commit');
-    return { result: toTransactionResult(transaction, { replay: false }), replay: false };
+    return { result: toTransactionResult(transaction, { replay: false }), effect: 'new' };
   }
 
   /**
@@ -289,10 +402,16 @@ export class SubmitWagerTransactionUseCase {
     wallet: Wallet,
     transaction: WagerTransaction,
     reference: WagerTransaction | undefined,
-    at: { correlationId: string; now: Date },
+    at: { correlationId: string; causationId: string | undefined; now: Date },
   ): Promise<IntegrationEvent<unknown>[]> {
     const { ids } = this.deps;
-    const context = (): EventContext => ({ eventId: ids.next(), correlationId: at.correlationId, occurredAt: at.now });
+    // Na fila, causationId = messageId (I-69); no HTTP, ausente.
+    const context = (): EventContext => ({
+      eventId: ids.next(),
+      correlationId: at.correlationId,
+      ...(at.causationId !== undefined ? { causationId: at.causationId } : {}),
+      occurredAt: at.now,
+    });
 
     switch (decision.type) {
       case 'REJECT': {

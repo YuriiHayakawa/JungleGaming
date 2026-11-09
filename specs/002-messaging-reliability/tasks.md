@@ -243,10 +243,10 @@ ack só depois do commit; reentregas nunca duplicam efeito.
 
 ### Testes da User Story 1 (escrever primeiro; devem falhar)
 
-- [ ] T038 [P] [US1] Escrever `test/unit/consumer-batching.test.ts` (R-22), com o `fake-sqs` e um processador de teste:
+- [X] T038 [P] [US1] Escrever `test/unit/consumer-batching.test.ts` (R-22), com o `fake-sqs` e um processador de teste:
   mensagens do mesmo `MessageGroupId` num lote são processadas em sequência e na ordem; grupos diferentes, em paralelo;
   o ack de cada mensagem só é chamado depois que o processador dela resolve
-- [ ] T039 [P] [US1] Escrever `test/integration/consumer-processing.test.ts` (US1 cenários 1, 5 e 6; FR-001, FR-003,
+- [X] T039 [P] [US1] Escrever `test/integration/consumer-processing.test.ts` (US1 cenários 1, 5 e 6; FR-001, FR-003,
   FR-004, FR-005, FR-008, FR-037, FR-038; I-26, I-28, I-69; SC-010), com `useTestQueues`, banco próprio e app com
   `CONSUMER_ENABLED=true`. Cada teste termina com `assertWalletMatchesLedger`.
   - BET "25.00" pela fila sobre "1000.00" → PROCESSED, saldo "975.00", um DEBIT, uma linha de inbox
@@ -259,42 +259,42 @@ ack só depois do commit; reentregas nunca duplicam efeito.
   - REFUND com referência inexistente → PENDING_REFERENCE gravada, inbox gravada, mensagem confirmada;
   - as linhas de log do processamento trazem `messageId`, `correlationId`, `transactionId`, `walletId` e `providerId`,
     sem `amount` nem `money`
-- [ ] T040 [P] [US1] Escrever `test/integration/cross-channel-replay.test.ts` (US1 cenário 3; FR-006; I-26, I-28): BET por
+- [X] T040 [P] [US1] Escrever `test/integration/cross-channel-replay.test.ts` (US1 cenário 3; FR-006; I-26, I-28): BET por
   HTTP e depois pela fila com a mesma chave → a mensagem é replay (sem efeito, sem evento), confirmada, com inbox
   apontando a transação existente; BET pela fila e depois por HTTP → 200 com `idempotentReplay` true; termina com
   `assertWalletMatchesLedger`
-- [ ] T041 [P] [US1] Escrever `test/integration/consumer-atomicity.test.ts` (FR-003, FR-013; constitution IV), com
+- [X] T041 [P] [US1] Escrever `test/integration/consumer-atomicity.test.ts` (FR-003, FR-013; constitution IV), com
   `FAILPOINT=after_ledger_insert_before_commit` e `CONSUMER_RETRY_BASE_SECONDS=1`: a mensagem não gera nenhuma linha
   (transação, ledger, outbox nem inbox) e não é confirmada (volta a ficar visível); depois de reiniciar a app sem
   failpoint, é processada uma única vez; termina com `assertWalletMatchesLedger`
-- [ ] T042 [P] [US1] Escrever `test/concurrency/message-burst.test.ts` com 3 instâncias consumidoras (US1 cenário 2;
+- [X] T042 [P] [US1] Escrever `test/concurrency/message-burst.test.ts` com 3 instâncias consumidoras (US1 cenário 2;
   FR-007; I-27, I-28; SC-001, SC-008): (a) o mesmo envelope enviado 50 vezes com `MessageDeduplicationId` distintos →
   exatamente 1 transação, no máximo 1 lançamento, 1 linha de inbox, um conjunto de eventos, e todas as entregas
   confirmadas; (b) 50 envelopes com `messageId` distintos e a mesma chave e o mesmo conteúdo → 1 efeito e 50 linhas de
   inbox apontando a mesma transação; termina com `assertWalletMatchesLedger`
-- [ ] T043 [P] [US1] Escrever `test/concurrency/crash-before-ack.test.ts` (US1 cenário 4; FR-005; I-28, I-40; SC-002):
+- [X] T043 [P] [US1] Escrever `test/concurrency/crash-before-ack.test.ts` (US1 cenário 4; FR-005; I-28, I-40; SC-002):
   uma instância com `FAILPOINT=after_commit_before_ack` processa a mensagem e sai (código 1) depois do commit; outra
   instância recebe a reentrega depois da visibilidade, reconhece a duplicata pela inbox e confirma; exatamente 1 efeito
   e `ApproximateReceiveCount` 2 na reentrega; termina com `assertWalletMatchesLedger`
 
 ### Implementação da User Story 1
 
-- [ ] T044 [US1] Estender `src/wagering/application/submit-wager-transaction.use-case.ts` (R-22; FR-003, FR-006; I-26,
+- [X] T044 [US1] Estender `src/wagering/application/submit-wager-transaction.use-case.ts` (R-22; FR-003, FR-006; I-26,
   I-28, I-68, I-69): o comando ganha `origin` (`http` | `queue`), `inbox?` (`consumerName`, `messageId`, `payloadHash`) e
   `causationId?`; no caminho rápido, replay de origem fila grava a inbox numa transação mínima apontando a transação
   existente (`23505` em `inbox_messages_pk` → relê a inbox); sob o lock da wallet relê a inbox antes da idempotência;
   replay grava a inbox na mesma transação; efeito novo grava a inbox depois da transação e antes da outbox; conflito de
   idempotência não grava inbox; os eventos levam o `causationId`. O caminho HTTP não muda (testes da 001 verdes)
-- [ ] T045 [US1] Implementar `src/messaging/application/consume-wager-message.use-case.ts` (plan, "Consumidor"; FR-001 a
+- [X] T045 [US1] Implementar `src/messaging/application/consume-wager-message.use-case.ts` (plan, "Consumidor"; FR-001 a
   FR-008): contexto de requisição por mensagem (`correlationId` = `causationId` = `messageId`); envelope (T036); caminho
   rápido da inbox; chamada do use case com origem fila; resultado gravado ou replay → `delete` depois do commit; failpoint
   `after_commit_before_ack` entre o commit e o `delete`; erro sem classificação ainda → a mensagem não é apagada (a
   classificação completa entra na US2)
-- [ ] T046 [US1] Implementar `src/messaging/interfaces/wager-transactions.consumer.ts` (provider Nest com
+- [X] T046 [US1] Implementar `src/messaging/interfaces/wager-transactions.consumer.ts` (provider Nest com
   `onApplicationBootstrap`, que inicia o `PollingLoop` se `CONSUMER_ENABLED`, e `onApplicationShutdown`, que para o laço),
   com long polling, lote de até 10 e processamento sequencial por grupo, e `src/messaging/messaging.module.ts`
   registrado em `src/app.module.ts` com `SQS_PORT` → `AwsSqsAdapter`. Faz o T038 a T043 passarem
-- [ ] T047 [US1] Revisar o diff da US1 contra `specs/002-messaging-reliability/review-checklist.md` (gate de Revisão,
+- [X] T047 [US1] Revisar o diff da US1 contra `specs/002-messaging-reliability/review-checklist.md` (gate de Revisão,
   Princípios II a V), com atenção a "ack só depois do commit", inbox na mesma transação e ordem de lock; registrar o
   resultado item a item; item reprovado volta para a task de origem
 

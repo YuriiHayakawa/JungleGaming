@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import type { EntityManager, MikroORM } from '@mikro-orm/postgresql';
+import { MikroOrmInboxRepository } from '../inbox/infrastructure/mikro-orm-inbox.repository.ts';
 import { MikroOrmOutboxWriter } from '../outbox/infrastructure/mikro-orm-outbox.writer.ts';
 import { FAILPOINTS, type Failpoints } from '../platform/failpoints/failpoints.ts';
 import { LOGGER, type JsonLogger } from '../platform/logging/json-logger.ts';
@@ -41,6 +42,7 @@ import {
           transactions: new MikroOrmWagerTransactionRepository(),
           ledger: new MikroOrmLedgerRepository(),
           outbox: new MikroOrmOutboxWriter(),
+          inbox: new MikroOrmInboxRepository(),
           failpoints,
           clock,
           ids,
@@ -53,5 +55,7 @@ import {
       useFactory: (orm: MikroORM) => new GetTransactionUseCase({ orm, transactions: new MikroOrmWagerTransactionRepository() }),
     },
   ],
+  // O consumidor da fila (MessagingModule) reutiliza o mesmo use case do HTTP (constitution IV, FR-001).
+  exports: [SUBMIT_WAGER_TRANSACTION_USE_CASE],
 })
 export class WageringModule {}

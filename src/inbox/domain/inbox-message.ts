@@ -3,6 +3,16 @@ import { DomainError, InvalidTransactionStateError } from '../../shared-kernel/d
 /** Dados de recebimento fora dos formatos da data-model §1 (I-28, I-69). */
 export class InvalidInboxMessageError extends DomainError {}
 
+/**
+ * Mesmo (consumerName, messageId) já registrado com outro payloadHash: mensagem venenosa, erro permanente, DLQ com
+ * `INBOX_PAYLOAD_MISMATCH` (I-28, I-70). Nunca é replay.
+ */
+export class InboxPayloadMismatchError extends DomainError {
+  constructor(readonly messageId: string) {
+    super(`message ${messageId} was already handled with a different payload`);
+  }
+}
+
 /** `messageId`: 1 a 128 caracteres em [A-Za-z0-9._:-], o mesmo conjunto do X-Correlation-Id (I-53, I-69). */
 const MESSAGE_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const PAYLOAD_HASH_PATTERN = /^[0-9a-f]{64}$/;
