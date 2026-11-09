@@ -15,7 +15,8 @@ const MAX_IDEMPOTENCY_KEY_LENGTH = 255;
  * - campos desconhecidos são descartados (strip padrão do z.object), e os conhecidos continuam estritos (I-57);
  * - `walletId` é normalizado para minúsculas; os demais ids são preservados como enviados (I-58);
  * - `amount` normalizado para 2 casas; zero só em LOSS (I-01, I-02, I-03);
- * - providerId "system" recusado (I-07); referência por kind conforme o I-13.
+ * - providerId "system" recusado (I-07); referência por kind conforme o I-13; autorreferência recusada (I-60).
+ * A fila (feature de mensageria) reusa este schema para o `data` da mensagem.
  * kind OPENING é tratado antes do schema, com o código próprio OPENING_NOT_ALLOWED (I-08).
  */
 export const submitWagerTransactionSchema = z
@@ -37,6 +38,14 @@ export const submitWagerTransactionSchema = z
     }
     if ((body.kind === 'REFUND' || body.kind === 'ROLLBACK') && !hasReference) {
       ctx.addIssue({ code: 'custom', path: ['referenceExternalTransactionId'], message: `${body.kind} requires a reference` });
+    }
+    // I-60: autorreferência é payload inválido. Comparação exata, com caixa (I-58).
+    if (hasReference && body.referenceExternalTransactionId === body.externalTransactionId) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['referenceExternalTransactionId'],
+        message: 'a transaction cannot reference itself',
+      });
     }
     if (body.kind !== 'LOSS' && body.money.amount === '0.00') {
       ctx.addIssue({ code: 'custom', path: ['money', 'amount'], message: 'amount must be greater than zero (zero only for LOSS)' });

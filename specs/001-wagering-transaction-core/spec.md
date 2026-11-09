@@ -320,6 +320,9 @@ reenviar e conferir que existe exatamente um efeito.
   `TRANSACTION_NOT_FOUND`, `retryable` false (I-55).
 - **`kind` OPENING** na API → 400 `OPENING_NOT_ALLOWED`; **providerId "system"** → 400 (I-07, I-08).
 - **BET com referência** → 400; **REFUND/ROLLBACK sem referência** → 400 (I-13).
+- **Autorreferência** (`referenceExternalTransactionId` igual ao `externalTransactionId` da própria transação, com
+  comparação exata e com caixa) em WIN, LOSS, REFUND ou ROLLBACK → 400 `VALIDATION_ERROR`, validada na borda antes
+  da idempotência; nada é registrado. Vale também para a mensagem da fila (I-60).
 - **Referência rejeitada** (REJECTED ou FAILED) → REJECTED `REFERENCE_REJECTED`; **referência pendente**
   (PENDING ou PENDING_REFERENCE) → PENDING_REFERENCE, desde que as checagens de consistência anteriores passem
   (I-15, I-44).

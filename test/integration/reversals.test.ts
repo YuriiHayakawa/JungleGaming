@@ -216,3 +216,42 @@ describe('payload inválido (cenário 9)', () => {
     });
   }
 });
+
+describe('autorreferência (I-60)', () => {
+  for (const kind of ['REFUND', 'ROLLBACK', 'WIN', 'LOSS'] as const) {
+    test(`${kind} referenciando o próprio externalTransactionId → 400 VALIDATION_ERROR, nada registrado`, async () => {
+      const wallet = await openWallet(http, '100.00');
+      const base = op(kind, wallet, '25.00');
+      const request = { ...base, referenceExternalTransactionId: base.externalTransactionId };
+      const response = await submitWager<ErrorBody>(http, request);
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatchObject({ code: 'VALIDATION_ERROR', retryable: false });
+      expect(response.body.error.details?.issues).toEqual([
+        { path: 'referenceExternalTransactionId', message: 'a transaction cannot reference itself' },
+      ]);
+      expect(await database.db.query('SELECT id FROM wager_transactions WHERE external_transaction_id = ?', [request.externalTransactionId])).toEqual(
+        [],
+      );
+      expect(await database.db.query("SELECT id FROM outbox_messages WHERE aggregate_id = ? AND event_type <> 'WalletBalanceChanged'", [wallet.id])).toEqual(
+        [],
+      );
+      expect(await walletRow(wallet.id)).toEqual({ balance: '100.00', version: 1 });
+      await assertWalletMatchesLedger(database.db, wallet.id);
+    });
+  }
+
+  test('a validação vem antes da idempotência (I-44): mesma chave de uma transação existente → 400, não 409 nem replay', async () => {
+    const wallet = await openWallet(http, '100.00');
+    const bet = op('BET', wallet, '25.00');
+    expect((await submitWager(http, bet)).status).toBe(201);
+
+    // mesmo provedor e mesma chave da BET, agora como REFUND que referencia a si mesmo
+    const selfReferencing = { ...op('REFUND', wallet, '25.00'), externalTransactionId: bet.externalTransactionId, referenceExternalTransactionId: bet.externalTransactionId };
+    const response = await submitWager<ErrorBody>(http, selfReferencing);
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('VALIDATION_ERROR');
+    expect(await walletRow(wallet.id)).toEqual({ balance: '75.00', version: 2 });
+    await assertWalletMatchesLedger(database.db, wallet.id);
+  });
+});

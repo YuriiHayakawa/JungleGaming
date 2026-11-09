@@ -28,7 +28,7 @@ export class WageringController {
     const idempotencyKey = parseIdempotencyKey(idempotencyKeyHeader);
     const input = parseSubmitWagerTransactionBody(body);
     // Contexto de log (constitution VIII): walletId e providerId logo depois da validação; o transactionId é gravado
-    // pelo use case assim que a transação é criada.
+    // pelo use case quando encontra a transação existente (replay ou conflito) ou depois do commit da nova.
     setRequestContextValues({ walletId: input.walletId, providerId: input.providerId });
 
     const result = await this.submitWager.execute({ idempotencyKey, input });

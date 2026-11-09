@@ -355,6 +355,17 @@ Todas as versões acima foram instaladas e exercitadas no spike de 2026-11-07 (s
   - Modo opcional `FAILPOINT=<nome>:serialization_failure_once`: na 1ª passagem lança um erro com SQLSTATE `40001`,
     que a unit of work repete (R-12); nas seguintes não faz nada. Prova que cada tentativa recomeça do zero
     (`test/integration/transaction-retry.test.ts`). Nome ou modo desconhecido recusa o boot. Acrescentado em 2026-11-07.
+  - `after_reversal_insert_before_commit`: atravessado só quando uma reversão (REFUND ou ROLLBACK) é aplicada,
+    depois das escritas e antes do commit (T096). Acrescentado em 2026-11-08. Modos:
+    - padrão: lança `FailpointError`, como `after_ledger_insert_before_commit`;
+    - `reversal_unique_violation_once`: na 1ª passagem lança um erro no formato da violação do índice
+      `wager_tx_single_reversal_uq` (SQLSTATE `23505` e `constraint` preenchida, os campos que o classificador lê);
+      o use case repete uma vez, do zero, e a 2ª execução aplica a reversão;
+    - `reversal_unique_violation_always`: o mesmo erro em toda passagem; prova que a 2ª violação vira 500
+      `INTERNAL_ERROR` sem efeito.
+    O erro é imitado porque, sob o lock da wallet, a corrida real não acontece: a 2ª reversão vê a 1ª e responde
+    `ALREADY_REVERSED`. O formato do `23505` real do índice, por `pg` e pelo MikroORM, é provado em
+    `test/integration/reversal-retry.test.ts`.
 - **Rationale**: I-40; testes de falha determinísticos sem mock de banco (constitution VII).
 - **Alternatives**: matar o processo por sinal em momento aleatório (rejeitado: não determinístico).
 

@@ -71,6 +71,10 @@ PENDING ─────────┼────────────► RE
 
 - `create(props)`: nasce PENDING; valida a exigência de referência por kind (I-13); recusa OPENING vindo de
   provedor (o use case de abertura usa uma factory interna `createOpening`).
+- `referenceTransactionId` (coluna `reference_transaction_id`) só é gravado quando a transação fica PROCESSED, pela
+  `markProcessed`. REJECTED (inclusive com referência existente e inconsistente) e PENDING_REFERENCE (inclusive com
+  referência existente porém pendente) ficam com o campo nulo: `reject` e `markPendingReference` não recebem
+  referência (enunciado §6.3). A referência externa (`reference_external_transaction_id`) é sempre gravada.
 - `markProcessed(referenceTransactionId, observedBalance, at)`, `markPendingReference(observedBalance,
   nextAttemptAt)`, `reject(code, observedBalance)`, `fail(code)`.
 - Consultas: `isTerminal`, `affectsBalance` (false para LOSS), `requiresReference` (REFUND, ROLLBACK),
@@ -481,8 +485,10 @@ S-05). Única exceção: o `SET LOCAL`, que não aceita parâmetro; ele recebe o
 
 1. `SET LOCAL lock_timeout = '<WALLET_LOCK_TIMEOUT_MS>ms'` (I-51)
 2. `SELECT ... FROM wallets WHERE id = ? FOR UPDATE`
-3. Releitura por `(provider_id, idempotency_key)` e por `(provider_id, external_transaction_id)` → replay ou 409
-   (I-56)
+3. Releitura da idempotência numa **consulta única**, num só snapshot:
+   `WHERE provider_id = ? AND (idempotency_key = ? OR external_transaction_id = ?)` → replay ou 409 (I-56). A linha
+   da mesma chave tem precedência. Duas consultas separadas podiam ver estados diferentes e devolver 409 a uma
+   requisição idêntica (research R-08). A mesma consulta é usada no caminho rápido e na releitura depois do `23505`
 4. Carregar a referência por `(provider_id, reference_external_transaction_id)`; se for PROCESSED e o kind for
    REFUND/ROLLBACK, checar se já existe reversão PROCESSED
 5. `WagerRulesService.decide(...)` (ordem do I-44)

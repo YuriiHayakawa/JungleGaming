@@ -371,13 +371,13 @@ de dinheiro como string; atomicidade com failpoint.
 - [X] T078 [P] [US2] Implementar `src/wagering/application/transaction-result.ts`: `{ transactionId, status, balance, idempotentReplay, failureCode?, retryable? }`, com `failureCode` e `retryable` só em REJECTED, e o status HTTP correspondente (201, 202 ou 422; 200 no replay de PROCESSED) (FR-054, FR-055, I-39, I-45)
 - [X] T079 [US2] Implementar `src/wagering/interfaces/http/wager-transaction.dto.ts`: o schema Zod do T067 com `superRefine` para a referência por kind e o zero só em LOSS; campos desconhecidos descartados (`strip`, I-57); `walletId` normalizado para minúsculas e os demais ids preservados (I-58); OPENING → `OpeningNotAllowedError`; o header `Idempotency-Key` é validado **antes** do corpo (ausente ou vazio → `IDEMPOTENCY_KEY_REQUIRED`; mais de 255 → `VALIDATION_ERROR`; I-44 passos 1 e 2, I-48). Faz o T067 passar
 - [X] T080 [US2] Implementar `src/wagering/application/submit-wager-transaction.use-case.ts`, versão sem idempotência (o replay vem na US3; data-model §3, I-44, R-07, R-19):
-  - calcula o hash e cria `WagerTransaction.create` com o `correlationId` do contexto, e grava o `transactionId` no contexto da requisição (T025);
+  - calcula o hash e cria `WagerTransaction.create` com o `correlationId` do contexto; o `transactionId` só entra no contexto da requisição (T025) **depois do commit**, com o id que de fato foi gravado (ajustado em 2026-11-08: uma tentativa desfeita pela unit of work nunca deixa no contexto um id inexistente; replay e conflito gravam o id da linha existente);
   - wallet inexistente (leitura num fork, fora da transação) → `WalletNotFoundError`;
   - pelo unit of work: `lockById`, `WagerRulesService.decide`, transição para PROCESSED ou REJECTED com `observedBalance`, `insert` da transação, `updateBalance` com versão esperada, `insert` do lançamento, eventos na outbox e `failpoints.hit('after_ledger_insert_before_commit')` antes do commit;
   - depois do commit, `failpoints.hit('after_commit_before_response')`;
   - toda query dentro da transação usa o EM recebido.
   Faz o T068, o T069 e o T070 passarem.
-- [X] T081 [US2] Implementar `src/wagering/interfaces/http/wagering.controller.ts` com `POST /wagering/transactions` (`@Headers('idempotency-key')`, `@Body` com pipe Zod e resposta montada a partir de `TransactionResult` com o status do T078, sem passar pelo filtro; I-45) e registrar o `WageringModule` em `src/app.module.ts`. **Contexto de log** (constitution VIII, C1): logo depois da validação, grava `walletId` e `providerId` no contexto da requisição (T025); o use case grava `transactionId` assim que a transação é criada ou encontrada (T080), para que todo log da requisição a partir daí traga os três. Faz o T071 ao T074 passarem
+- [X] T081 [US2] Implementar `src/wagering/interfaces/http/wagering.controller.ts` com `POST /wagering/transactions` (`@Headers('idempotency-key')`, `@Body` com pipe Zod e resposta montada a partir de `TransactionResult` com o status do T078, sem passar pelo filtro; I-45) e registrar o `WageringModule` em `src/app.module.ts`. **Contexto de log** (constitution VIII, C1): logo depois da validação, grava `walletId` e `providerId` no contexto da requisição (T025); o use case grava `transactionId` quando a transação existente é encontrada (replay ou conflito) ou depois do commit da nova (T080, ajustado em 2026-11-08), para que todo log da requisição a partir daí traga os três. Faz o T071 ao T074 passarem
 - [X] T128 [US2] Revisar o diff da US2 contra `specs/001-wagering-transaction-core/review-checklist.md` (gate de Revisão da constitution, Princípios II a V), com atenção ao lock por wallet, à outbox na mesma transação e às colunas de dinheiro; registrar o resultado item a item; item reprovado volta para a task de origem antes do checkpoint
 - [X] T132 [US2] Corrigir a repetição interna da submissão (R-12, R-19; correção pedida depois do checkpoint da US2): em `src/wagering/application/submit-wager-transaction.use-case.ts`, a `WagerTransaction` passa a ser criada **dentro** do callback do `unitOfWork.run`, com uma instância PENDING nova, id novo e eventIds novos a cada tentativa (o mesmo em `src/wallets/application/create-wallet.use-case.ts`: wallet, abertura e evento novos por tentativa); cada tentativa abre um fork novo do EntityManager (teste unitário em `test/unit/unit-of-work.test.ts`); o `transactionId` só entra no contexto de log depois da checagem de wallet existente. Failpoint `FAILPOINT=after_ledger_insert_before_commit:serialization_failure_once` (R-16), que lança um erro com SQLSTATE 40001 só na 1ª passagem (`test/unit/failpoints.test.ts`). Teste de integração `test/integration/transaction-retry.test.ts`: a BET termina 201 com 1 transação, 1 débito, 1 lançamento, eventos gravados uma vez e `assertWalletMatchesLedger` verde
 
@@ -503,7 +503,7 @@ códigos `AMOUNT_MISMATCH`, `ALREADY_REVERSED`, `REVERSAL_WOULD_OVERDRAW` e `REF
 
 ### Implementação da User Story 5
 
-- [X] T094 [US5] Ativar em `src/wagering/domain/wager-rules.service.ts` as regras de REFUND e ROLLBACK nos passos 5.2 (`INVALID_REFERENCE_KIND` por kind, `AMOUNT_MISMATCH`), 5.3 (REJECTED ou FAILED → `REFERENCE_REJECTED`), 5.4 (`ALREADY_REVERSED`) e 5.5 (`REVERSAL_WOULD_OVERDRAW`), com a direção inversa do ROLLBACK. Faz o T091 passar (I-44)
+- [X] T094 [US5] Ativar em `src/wagering/domain/wager-rules.service.ts` as regras de REFUND e ROLLBACK nos passos 5.2 (`INVALID_REFERENCE_KIND` por kind, `AMOUNT_MISMATCH`), 5.3 (REJECTED ou FAILED → `REFERENCE_REJECTED`; vale também para WIN e LOSS com referência, I-46), 5.4 (`ALREADY_REVERSED`) e 5.5 (`REVERSAL_WOULD_OVERDRAW`), com a direção inversa do ROLLBACK. Faz o T091 passar (I-44)
 - [X] T095 [US5] Estender `src/wagering/infrastructure/mikro-orm-wager-transaction.repository.ts` com `existsProcessedReversal(em, referenceTransactionId)`: `SELECT 1 ... WHERE reference_transaction_id = ? AND kind IN ('REFUND','ROLLBACK') AND status = 'PROCESSED'`, que usa `wager_tx_single_reversal_uq` (I-16)
 - [X] T096 [US5] Estender `src/wagering/application/submit-wager-transaction.use-case.ts` (R-10, R-12, FR-025):
   - sob o lock, consulta `existsProcessedReversal` só quando a referência é PROCESSED e o kind é REFUND ou ROLLBACK;
@@ -540,7 +540,8 @@ códigos `AMOUNT_MISMATCH`, `ALREADY_REVERSED`, `REVERSAL_WOULD_OVERDRAW` e `REF
 
 - [X] T099 [P] [US6] Implementar `src/wagering/domain/events/wager-transaction-pending-reference.event.ts` (v1, `data` com os identificadores, `kind`, `money`, `referenceExternalTransactionId` e `nextAttemptAt`; I-33)
 - [X] T100 [US6] Ativar em `src/wagering/domain/wager-rules.service.ts` o passo 5.3 para referência ausente, PENDING ou PENDING_REFERENCE → `PendingReference`, depois das checagens de consistência quando a referência existe. Faz o T097 passar (I-15, I-44)
-- [X] T101 [US6] Estender `src/wagering/application/submit-wager-transaction.use-case.ts`: na decisão `PendingReference`, `markPendingReference` com `nextAttemptAt` = `clock.now()` + 5 s (base do I-21) e `observedBalance` = saldo atual; insere a transação e `WagerTransactionPendingReference`, sem tocar na wallet; `TransactionResult` com status 202 (I-39). Faz o T098 passar
+- [X] T101 [US6] Estender `src/wagering/application/submit-wager-transaction.use-case.ts`: na decisão `PendingReference`, `markPendingReference` com `nextAttemptAt` = `clock.now()` do recebimento (o `createdAt` da transação) + 5 s (base do I-21) e `observedBalance` = saldo atual; insere a transação e `WagerTransactionPendingReference`, sem tocar na wallet; `TransactionResult` com status 202 (I-39). Faz o T098 passar
+- [X] T133 [US6] Recusar a autorreferência na borda (I-60, registrado em 2026-11-08 depois do checkpoint da US6): em `src/wagering/interfaces/http/wager-transaction.dto.ts`, `referenceExternalTransactionId` igual ao `externalTransactionId` → 400 `VALIDATION_ERROR` com o issue em `referenceExternalTransactionId`, comparação com caixa (I-58), antes da idempotência (I-44 passo 2); o mesmo schema serve à fila. Testes: unitário em `test/unit/wager-transaction-dto.test.ts` (WIN, LOSS, REFUND e ROLLBACK; caixa diferente é aceita) e integração em `test/integration/reversals.test.ts` (400 sem nenhuma linha nem evento, e 400, não 409, com a chave de uma transação existente)
 
 **Checkpoint US6**: `bun test test/unit/wager-rules.test.ts test/unit/wager-transaction.test.ts && bun test --preload ./test/support/db-setup.preload.ts test/integration/pending-reference.test.ts`
 
@@ -555,7 +556,7 @@ todas as respostas.
 
 ### Testes da User Story 7 (escrever primeiro; devem falhar)
 
-- [ ] T102 [P] [US7] Escrever `test/integration/http-contract.test.ts` (US7 cenários 1 a 3; FR-054 a FR-058, SC-009, SC-011, I-38, I-39, I-45, I-48, I-50):
+- [X] T102 [P] [US7] Escrever `test/integration/http-contract.test.ts` (US7 cenários 1 a 3; FR-054 a FR-058, SC-009, SC-011, I-38, I-39, I-45, I-48, I-50):
   - **cinco situações na submissão**: payload inválido → 400; conflito de idempotência → 409; rejeição de negócio → 422 com corpo `TransactionResult`; aceite pendente → 202; falha transitória → 503 com `Retry-After`, provocada pelo lock externo do T073; os cinco status são distintos;
   - **envelope**: 400, 404, 409 e 503 usam `{ error: { code, message, retryable, correlationId } }`, com `retryable` de acordo com a taxonomia §7;
   - **edge cases da spec**: `Idempotency-Key` ausente ou vazio → `IDEMPOTENCY_KEY_REQUIRED`; chave com mais de 255 → `VALIDATION_ERROR`; JSON malformado → 400 `VALIDATION_ERROR`; `playerId` com mais de 255 → 400; `walletId` malformado no corpo → 400;
@@ -563,7 +564,7 @@ todas as respostas.
   - **ordem do I-44 (FR-015, passos 1 a 3)**, com casos combinados: chave ausente **e** corpo inválido → 400 `IDEMPOTENCY_KEY_REQUIRED` (o header vem antes do corpo); corpo inválido com uma chave já usada por uma transação existente → 400 `VALIDATION_ERROR`, **não** 409 (a validação vem antes da idempotência); o replay de uma transação existente não depende da busca da wallet (passo 3 antes do 4);
   - **sem eco**: nenhuma `message` contém o `amount` enviado;
   - **SC-011**: cada operação sem disputa responde em menos de 1 s.
-- [ ] T103 [P] [US7] Escrever `test/integration/correlation-id.test.ts`, o teste de correlationId válido, inválido e ausente (FR-060, I-53, R-14):
+- [X] T103 [P] [US7] Escrever `test/integration/correlation-id.test.ts`, o teste de correlationId válido, inválido e ausente (FR-060, I-53, R-14):
   - `X-Correlation-Id: abc-123` → volta igual no header e em `error.correlationId` quando há erro, e fica gravado em `wager_transactions.correlation_id` e no `correlationId` dos eventos da outbox;
   - **ausente** → o header de resposta traz um UUIDv7 gerado;
   - **inválido** (129 caracteres, com espaço, vazio) → nunca 400; a operação segue e a resposta traz um UUIDv7 gerado;
@@ -573,8 +574,8 @@ todas as respostas.
 
 ### Implementação da User Story 7
 
-- [ ] T104 [US7] Ajustar `src/platform/http/global-exception.filter.ts` para mapear os erros do próprio Nest e do body-parser: JSON malformado, `Content-Type` diferente de JSON, corpo acima do limite e corpo vazio viram 400 `VALIDATION_ERROR` no envelope do I-38, sem ecoar o corpo; rota ou método inexistente vira 404 `ROUTE_NOT_FOUND` (I-59; o mapeamento do filtro já foi feito no ajuste do I-59, aqui fica a cobertura ponta a ponta) (FR-056, FR-058). Faz o T102 passar
-- [ ] T105 [US7] Garantir em `src/wallets/application/create-wallet.use-case.ts` e em `src/wagering/application/submit-wager-transaction.use-case.ts` que o `correlationId` do contexto é passado para a entidade e para todos os eventos, e que o replay não altera o valor gravado (FR-060, I-53). Faz o T103 passar
+- [X] T104 [US7] Ajustar `src/platform/http/global-exception.filter.ts` para mapear os erros do próprio Nest e do body-parser: JSON malformado, `Content-Type` diferente de JSON, corpo acima do limite e corpo vazio viram 400 `VALIDATION_ERROR` no envelope do I-38, sem ecoar o corpo; rota ou método inexistente vira 404 `ROUTE_NOT_FOUND` (I-59; o mapeamento do filtro já foi feito no ajuste do I-59, aqui fica a cobertura ponta a ponta) (FR-056, FR-058). Faz o T102 passar
+- [X] T105 [US7] Garantir em `src/wallets/application/create-wallet.use-case.ts` e em `src/wagering/application/submit-wager-transaction.use-case.ts` que o `correlationId` do contexto é passado para a entidade e para todos os eventos, e que o replay não altera o valor gravado (FR-060, I-53). Faz o T103 passar
 
 **Checkpoint US7**: `bun test --preload ./test/support/db-setup.preload.ts test/integration/http-contract.test.ts test/integration/correlation-id.test.ts`
 
@@ -669,6 +670,11 @@ parcial.
 ## Phase 12: Polish & Cross-Cutting Concerns
 
 **Purpose**: documentação, guardrails automáticos, limpeza do spike e a suíte completa.
+
+> **Adiado (decisão de 2026-11-08):** T119 (`README.md`), T120 (`ARCHITECTURE.md`) e T121 (remoção do `spike/`)
+> ficam para o fim do projeto, depois das features 2 (mensageria) e 3, para documentar a arquitetura completa de uma
+> vez e manter o spike como referência até lá. Nesta feature, a fase Polish executa só T118, T131 e T122. O gate
+> "documentação atualizada" da constitution (Implement) fica pendente até esse fechamento.
 
 - [ ] T118 [P] Escrever `test/unit/conventions.test.ts`, guardrail que varre o código-fonte e aponta arquivo e linha de cada violação (constitution II, V, VI e VII; falhas eliminatórias 1 e 8; plan, "Isolamento de testes" e "Guardrails de código"):
   - **Limpeza de dados em `test/**`**: `TRUNCATE` e `DELETE` são proibidos **como limpeza de dados**. Os padrões procurados são comandos SQL, não mensagens de erro: `/\bDELETE\s+FROM\b/i` e `/\bTRUNCATE\s+(TABLE\s+)?(ONLY\s+)?"?[a-z_][a-z0-9_]*"?\s*($|[;'"\x60,)]|\s+(CASCADE|RESTRICT|RESTART|CONTINUE)\b)/i`.

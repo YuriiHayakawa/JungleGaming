@@ -110,6 +110,19 @@ describe('kind, providerId e referência (I-07, I-08, I-13)', () => {
       expect(parse(withBody({ kind, referenceExternalTransactionId: 'Bet-1' })).referenceExternalTransactionId).toBe('Bet-1');
     }
   });
+
+  test('autorreferência (referência = o próprio externalTransactionId) → VALIDATION_ERROR no campo da referência (I-60)', () => {
+    for (const kind of ['WIN', 'LOSS', 'REFUND', 'ROLLBACK']) {
+      expect(issuesOf(() => parse(withBody({ kind, referenceExternalTransactionId: valid.externalTransactionId })))).toEqual([
+        'referenceExternalTransactionId',
+      ]);
+    }
+  });
+
+  test('a comparação da autorreferência é com caixa (I-58): "Transaction-123" referenciando "transaction-123" é aceito', () => {
+    const body = parse(withBody({ kind: 'REFUND', externalTransactionId: 'transaction-123', referenceExternalTransactionId: 'Transaction-123' }));
+    expect(body.referenceExternalTransactionId).toBe('Transaction-123');
+  });
 });
 
 describe('identificadores (I-50, I-58)', () => {
