@@ -15,6 +15,10 @@ const MONEY_KEYS = new Set([
   'balanceAfter',
   'initialBalance',
   'observedBalance',
+  // reconciliação (003): nenhum desses vai para o log, nem por engano (FR-008)
+  'storedBalance',
+  'calculatedBalance',
+  'difference',
 ]);
 
 function redactMoney(value: unknown): unknown {

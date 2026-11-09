@@ -61,3 +61,42 @@ rodada, porque o código deles ainda não existia): `bun run typecheck` ok; `bun
 novos: métricas, encerramento, `@Public()`, handler de sinal e parser de teste); `bun run test:integration` 221 pass em
 152 s (219 + o T001 e o autoteste do `stall()`); `bun run test:concurrency` 23 pass em 70 s (inclui `signal-exit` e
 `graceful-sigterm` em container, com e sem init, já com o `gracefulShutdown`).
+
+## US1 — Reconciliação
+
+| # | Decisão | Motivo | Task |
+|---|---------|--------|------|
+| N3-13 | Além de `SET TRANSACTION READ ONLY` como primeira instrução (com `isolationLevel: REPEATABLE_READ` na transação do MikroORM), a transação lê `current_setting('transaction_isolation')` e `current_setting('transaction_read_only')` antes das leituras; se não for `repeatable read` e `on`, lança `ReconciliationSnapshotError` (500, erro de programação). | E-3: o snapshot `REPEATABLE READ`/`READ ONLY` fica conferido pelo próprio banco a cada execução, não por convenção; toda execução dos testes de integração e de concorrência prova o modo. Custo: uma consulta trivial a mais. | T017 |
+| N3-14 | O saldo recalculado chega como `numeric::text` com sinal e vira `Money` por `signedMoney` (tira o `-`, `Money.from` e `negate()`), sem passar por `number`. Limitação: num ledger adulterado cuja soma com sinal passe de 9999999999999999.99 em módulo, `Money.from` recusa e a reconciliação responde 500 em vez de 200 inconsistente. | `Money.from` só aceita o formato não negativo do I-01 (contrato de entrada); a soma de um ledger adulterado pode ser negativa. Com as guardas da 001, a soma é sempre o saldo (≤ limite); o caso só existe com o banco adulterado além dos CHECKs por lançamento. Não altero o `Money` (shared kernel, regra de dinheiro). | T016 |
+| N3-15 | `storedBalance`, `calculatedBalance` e `difference` entraram na lista de chaves monetárias que o `JsonLogger` nunca escreve. | Defesa em profundidade do FR-008: mesmo que alguém passe o resultado inteiro ao log, os valores não saem. O log de divergência já não os inclui. | T017 |
+| N3-16 | `firstBrokenSeq` e `checkedEntries` são `number` JSON; o `seq` (`bigint`) só vira `number` depois de conferido como inteiro seguro (`safeInteger`); fora disso, erro de programação. | R-37. São posições e contagens, não dinheiro. | T016 |
+| N3-17 | T013, "dois desvios que se anulam na soma": como a soma com sinal só depende de `direction` e `amount` (e `amount` está preso por FK ao valor da transação), o caso é provocado deslocando `balance_before`/`balance_after` de dois lançamentos em sentidos opostos (+5 e −5): saldo armazenado e soma iguais, `difference` 0.00, cadeia quebrada. Casos adicionais: primeiro lançamento com `before` ≠ 0 e o deslocamento do último (elo e cauda quebrados no mesmo `seq`). | Os CHECKs por lançamento continuam ativos no banco sem guardas, então toda adulteração mantém `after = before ± amount`. Uma quebra "só de cauda" sem mudar o saldo armazenado não é possível sem alterar `amount`; o caso de cauda pelo saldo armazenado está nos testes de saldo maior/menor. | T013 |
+| N3-18 | T014: as 50 BETs vão round-robin para as 3 instâncias e **cada uma das 3** reconcilia a mesma wallet em laço ao mesmo tempo (465 leituras na rodada registrada). Saldo 300.00 e BETs de 10.00: 30 aceitas, 20 rejeitadas. | "3 instâncias" e "outra instância reconcilia" juntos: toda leitura disputa com escritas da própria instância e das outras, o que é mais forte que um reconciliador separado. Mesmo critério: todas `consistent` true e `checkedEntries` não decrescente por laço. | T014 |
+| N3-19 | Processo TDD: os testes da US1 foram escritos antes do código e vistos vermelhos (`reconciliation.test.ts` sem o módulo; `reconciliation-divergence.test.ts` 1 pass, 9 fail por rota inexistente). Um bug do próprio teste apareceu no verde: `SELECT seq::text AS seq … ORDER BY seq` ordenava pelo alias texto ("10" < "9"); corrigido com outro alias. O SQL de produção ordena pelo `bigint` dentro do CTE e não tem esse problema. Mutação conferida: com `READ COMMITTED` e 20 ms entre as duas leituras, o T014 falha com um falso positivo (`difference` 10.00, `consistent` false); com o código real, passa. | Registro honesto, como no N-21 e N-33 da 002. | T011–T014 |
+
+### Revisão da US1 contra o review-checklist.md (T019)
+
+Diff revisado: `src/reconciliation/**` (domínio, reader, use case, controller, módulo), `app.module.ts` (import do
+módulo), `json-logger.ts` (chaves monetárias), os quatro arquivos de teste.
+
+| Item | Resultado | Evidência |
+|------|-----------|-----------|
+| Dinheiro sem `number` | OK | Saldos e diferença como `Money` (decimal.js) de ponta a ponta; SQL devolve `balance::text`, `sum(...)::text` e `balance_after::text`; resposta com strings de 2 casas (`toJSON`). Os únicos `number` são `checkedEntries` e `seq`. Varredura do diff sem `Number(`/`parseFloat(` em dinheiro (guardrail (c)). |
+| Nenhuma escrita nova | OK | Nenhum `INSERT`/`UPDATE`/`DELETE` em `src/reconciliation/**`; a transação é `READ ONLY` (o banco recusaria). `reconciliation.test.ts`: wallets, ledger, transações, outbox e inbox idênticos linha a linha antes e depois. |
+| Triggers presentes | OK | Nenhuma migration tocada; o banco sem guardas é o template próprio (E-4), com sanidade no próprio teste (nenhum trigger, nenhuma função de guarda). |
+| Sem mock em integração e concorrência | OK | PostgreSQL e MiniStack reais; o 503 é o proxy TCP real cortado; T014 com 3 processos reais. |
+| Sem relógio nem id no domínio | OK | `reconcile` não lê tempo nem gera id; nada de `new Date()`, `Date.now(`, `randomUUID(`, `Math.random(` no diff. |
+| Erros no envelope único | OK | 400 (`walletIdParamSchema` da 001), 404 (`WalletNotFoundError`), 503 com `Retry-After` (`ServiceUnavailableError` pelo `classifyDbError` da 001) e 500, todos pelo filtro global; testados no T012. |
+| Reconciliação somente leitura num snapshot | OK | `transactional(…, { isolationLevel: REPEATABLE_READ })` + `SET TRANSACTION READ ONLY` como primeira instrução + conferência do modo pelo banco (N3-13); saldo e agregado na mesma transação; nenhum `FOR UPDATE`/`FOR SHARE`; soma com `sum(CASE …)` e cadeia com `lag(balance_after) OVER (ORDER BY seq)` no banco, uma linha devolvida (1 000 lançamentos em ~4 ms no T012). T014 e a mutação do N3-19 provam o snapshot. |
+| Divergência sinalizada e nunca corrigida | OK | `consistent` false na resposta 200; `logger.error('reconciliation.divergence', { walletId, checkedEntries, firstBrokenSeq?, consistent: false })` com o `correlationId` do contexto e sem nenhum valor monetário (T013 confere chaves e valores); `+1` em `reconciliation_divergences_total` por detecção (duas → +2); nenhum caminho de escrita existe no módulo; T013 confere wallet e ledger idênticos depois. |
+| Divergência testada sem desligar guardas | OK | Só `useBareTestDatabase` (template próprio, E-4) no T013; nenhum `DISABLE TRIGGER`/`session_replication_role`; a comparação também é testada como função pura (T011, 22 casos). |
+| Health correto | N/A | US2. |
+| Métricas de baixa cardinalidade e sem dinheiro | OK | O contador novo não tem rótulo. |
+| Endpoints sem autenticação | OK | `@Public()` na rota; T012 chama sem credencial nenhuma. |
+
+### Checkpoint da US1
+
+`bun test test/unit/reconciliation.test.ts` 22 pass; `reconciliation.test.ts` 11 pass (1 000 lançamentos em 4,2 ms);
+`reconciliation-divergence.test.ts` 10 pass; `reconciliation-under-load.test.ts` 1 pass (169 + 143 + 153 leituras, todas
+consistentes). Suítes completas sobre a árvore do commit da US1: `bun run typecheck` ok; `bun run test:unit` 654 pass;
+`bun run test:integration` 242 pass em 164 s; `bun run test:concurrency` 24 pass em 75 s.

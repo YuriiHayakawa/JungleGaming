@@ -102,7 +102,7 @@ cadeia alterados (inconsistentes, com log e contador, dados intactos).
 
 ### Testes da User Story 1 (escrever primeiro; devem falhar)
 
-- [ ] T011 [P] [US1] Escrever `test/unit/reconciliation.test.ts` (R-37; FR-004 a FR-007): `reconcile(input)` com
+- [X] T011 [P] [US1] Escrever `test/unit/reconciliation.test.ts` (R-37; FR-004 a FR-007): `reconcile(input)` com
   - wallet consistente (`difference` 0.00, `chainConsistent` true, sem `firstBrokenSeq`);
   - sem lançamentos e saldo 0.00 (consistente, `checkedEntries` 0) e sem lançamentos com saldo ≠ 0 (inconsistente, cadeia
     íntegra);
@@ -111,7 +111,7 @@ cadeia alterados (inconsistentes, com log e contador, dados intactos).
   - cauda quebrada (`after` do último ≠ saldo armazenado, `firstBrokenSeq` = último `seq`);
   - soma certa com cadeia quebrada → `consistent` false;
   - moedas diferentes recusadas; nenhum `number` em valor monetário
-- [ ] T012 [P] [US1] Escrever `test/integration/reconciliation.test.ts` (US1 cenários 1, 2, 6 e 7; FR-001 a FR-004,
+- [X] T012 [P] [US1] Escrever `test/integration/reconciliation.test.ts` (US1 cenários 1, 2, 6 e 7; FR-001 a FR-004,
   FR-009 a FR-012; SC-001, SC-008, SC-009; I-37, I-74), com PostgreSQL e MiniStack reais:
   - consistente depois de BET, WIN, LOSS, REFUND, ROLLBACK, uma PENDING_REFERENCE resolvida pelo worker e transações
     pela fila; `checkedEntries` igual à contagem de lançamentos da wallet;
@@ -123,7 +123,7 @@ cadeia alterados (inconsistentes, com log e contador, dados intactos).
   - sem credencial;
   - wallet com 1 000 lançamentos reconciliada em menos de 1 s (SC-008);
   - `assertWalletMatchesLedger` ao fim de cada teste
-- [ ] T013 [P] [US1] Escrever `test/integration/reconciliation-divergence.test.ts` (US1 cenários 3 e 4; FR-005 a
+- [X] T013 [P] [US1] Escrever `test/integration/reconciliation-divergence.test.ts` (US1 cenários 3 e 4; FR-005 a
   FR-008; SC-002; R-38), com `useBareTestDatabase` e a app subida contra esse banco; cria wallets e transações pela API
   e provoca a divergência com `UPDATE` direto:
   - saldo armazenado maior e menor que o ledger → `consistent` false, `difference` com o sinal certo;
@@ -135,7 +135,7 @@ cadeia alterados (inconsistentes, com log e contador, dados intactos).
     `checkedEntries`, `firstBrokenSeq` e `consistent` false, **sem** nenhum campo monetário; `+1` em
     `reconciliation_divergences_total` por detecção (duas reconciliações → +2); saldo e ledger iguais depois (nada
     corrigido)
-- [ ] T014 [P] [US1] Escrever `test/concurrency/reconciliation-under-load.test.ts` (US1 cenário 5; FR-002, FR-010;
+- [X] T014 [P] [US1] Escrever `test/concurrency/reconciliation-under-load.test.ts` (US1 cenário 5; FR-002, FR-010;
   SC-003; constitution III): 3 instâncias; 50 BETs concorrentes numa wallet, distribuídas pelas instâncias, enquanto
   outra instância reconcilia a mesma wallet em laço até as BETs terminarem; todas as leituras `consistent` true e
   `checkedEntries` não decrescente; ao fim, uma reconciliação com `checkedEntries` = 1 + BETs aceitas e
@@ -143,23 +143,23 @@ cadeia alterados (inconsistentes, com log e contador, dados intactos).
 
 ### Implementação da User Story 1
 
-- [ ] T015 [US1] Implementar `src/reconciliation/domain/reconciliation.ts` (R-37; data-model §1): `reconcile(input)`
+- [X] T015 [US1] Implementar `src/reconciliation/domain/reconciliation.ts` (R-37; data-model §1): `reconcile(input)`
   puro, sem I/O, com `Money` (decimal.js), regras do data-model ("elo quebrado em n ⇔ (n é o primeiro e before[n] ≠
   0.00) ou (n não é o primeiro e before[n] ≠ after[n−1])"; "cauda quebrada ⇔ existe lançamento e after[último] ≠
   storedBalance"; "consistent ⇔ difference zero e chainConsistent"). Faz o T011 passar
-- [ ] T016 [US1] Implementar `src/reconciliation/infrastructure/mikro-orm-reconciliation.reader.ts` (R-36; data-model
+- [X] T016 [US1] Implementar `src/reconciliation/infrastructure/mikro-orm-reconciliation.reader.ts` (R-36; data-model
   §2.1): as duas consultas, com `?`, `numeric::text`, `lag(balance_after) OVER (ORDER BY seq)`, sem `FOR UPDATE`;
   `seq` convertido para inteiro só depois de conferido como seguro
-- [ ] T017 [US1] Implementar `src/reconciliation/application/reconcile-wallet.use-case.ts` (R-36; FR-002, FR-008,
+- [X] T017 [US1] Implementar `src/reconciliation/application/reconcile-wallet.use-case.ts` (R-36; FR-002, FR-008,
   FR-011): fork do EM, `transactional` com `REPEATABLE READ` e `SET TRANSACTION READ ONLY` como primeira instrução;
   wallet ausente → `WalletNotFoundError`; falha transitória → `ServiceUnavailableError` (classificador da 001); depois
   da transação, `reconcile`; divergência → `logger.error('reconciliation.divergence', …)` sem valores e
   `metrics.increment('reconciliation_divergences_total')`
-- [ ] T018 [US1] Implementar `src/reconciliation/interfaces/http/reconciliation.controller.ts` (`@Controller('wallets')`,
+- [X] T018 [US1] Implementar `src/reconciliation/interfaces/http/reconciliation.controller.ts` (`@Controller('wallets')`,
   `@Post(':walletId/reconciliation')`, `@HttpCode(200)`, `@Public()`, `walletIdParamSchema` da 001, corpo ignorado) e
   `src/reconciliation/reconciliation.module.ts`, registrado em `src/app.module.ts` ([contracts/http.md](contracts/http.md)).
   Faz o T012, o T013 e o T014 passarem
-- [ ] T019 [US1] Revisar o diff da US1 contra o `review-checklist.md`, com atenção a "Reconciliação somente leitura num
+- [X] T019 [US1] Revisar o diff da US1 contra o `review-checklist.md`, com atenção a "Reconciliação somente leitura num
   snapshot", "Divergência sinalizada e nunca corrigida" e "Divergência testada sem desligar guardas"; registrar item a
   item em `specs/003-reconciliation-health-metrics/implementation-notes.md`
 
